@@ -12,7 +12,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("Gtk4LayerShell", "1.0")
-from gi.repository import Gtk, Gdk, Adw, Gtk4LayerShell, GLib
+from gi.repository import Gtk, Gdk, Adw, Gtk4LayerShell, GLib  # noqa
 
 
 # Custom CSS for rounded corners and the dimming effect
@@ -74,6 +74,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
     def __init__(self, scrim, **kwargs):
         super().__init__(**kwargs)
         self.scrim = scrim
+        self.current_inputs = set()  # Track current sink input indices
 
         # Layer Shell Configuration
         Gtk4LayerShell.init_for_window(self)
@@ -135,12 +136,18 @@ class VolumeOverlay(Adw.ApplicationWindow):
             output = subprocess.check_output(
                 ["pactl", "list", "sink-inputs"], text=True
             )
-            self.list_box.remove_all()
             blocks = output.strip().split("\n\n")
+            
+            # Extract current sink input indices
+            new_inputs = set()
+            input_data = {}
+            
             for block in blocks:
                 if "Sink Input #" in block:
                     lines = block.splitlines()
                     idx = lines[0].split("#")[-1].strip()
+                    new_inputs.add(idx)
+                    
                     name, volume = "Unknown Application", 0
                     for line in lines:
                         if "application.name =" in line:
@@ -149,7 +156,16 @@ class VolumeOverlay(Adw.ApplicationWindow):
                             parts = line.split("/")
                             if len(parts) > 1:
                                 volume = int(parts[1].strip().replace("%", ""))
+                    input_data[idx] = (name, volume)
+            
+            # Only rebuild if inputs have changed
+            if new_inputs != self.current_inputs:
+                self.current_inputs = new_inputs
+                self.list_box.remove_all()
+                for idx in sorted(input_data.keys()):
+                    name, volume = input_data[idx]
                     self.list_box.append(VolumeSliderRow(idx, name, volume))
+            
         except Exception:
             pass
         return True
