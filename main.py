@@ -19,7 +19,6 @@ from gi.repository import Gtk, Gdk, Adw, Gtk4LayerShell, GLib  # noqa
 CSS = """
 .overlay-window {
     font-family: Nunito;
-    # background-color: @window_bg_color;
     background-color: alpha(#1c1f26, 0.9);
     color: #d8dee9;
     border-radius: 30px;
@@ -28,6 +27,7 @@ CSS = """
 }
 
 .title-1 {
+    font-size: 24px;
     font-weight: normal;
 }
 
@@ -43,25 +43,56 @@ CSS = """
 .boxed-list row:focus {
     outline: none;
 }
+
+.title-label {
+    font-size: 16px;
+}
+
+.subtitle-label {
+    font-size: 12px;
+    opacity: 0.6;
+}
+
+.close-btn {
+    padding: 5px 10px;
+    border-radius: 50px;
+}
+.close-btn:selected {outline: none;}
 """
 
 
 class VolumeSliderRow(Adw.ActionRow):
-    def __init__(self, index, name, initial_volume):
+    def __init__(self, index, app_name, media_name, initial_volume):
         super().__init__()
         self.index = index
 
-        # Create a fixed-width box for the title
-        title_box = Gtk.Box()
-        title_box.set_size_request(150, -1)  # Fixed width for program names
+        # Create title/subtitle box with fixed width
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        title_box.set_size_request(250, -1)
+        title_box.set_hexpand(False)
+
         title_label = Gtk.Label()
-
-        # Truncate name if too long
-        display_name = name[:12] + "..." if len(name) > 12 else name
-        title_label.set_text(display_name)
+        title_label.set_text(app_name)
         title_label.set_halign(Gtk.Align.START)
-
+        title_label.set_valign(Gtk.Align.FILL)
+        title_label.set_vexpand(True)
+        title_label.set_ellipsize(3)  # ELLIPSIZE_END
+        title_label.set_max_width_chars(30)
+        title_label.add_css_class("title-label")
         title_box.append(title_label)
+
+        # Add subtitle if present and different
+        if media_name and media_name != app_name:
+            subtitle_label = Gtk.Label()
+            subtitle_label.set_text(media_name)
+            subtitle_label.set_halign(Gtk.Align.START)
+            subtitle_label.set_valign(Gtk.Align.START)
+            subtitle_label.set_vexpand(True)
+            subtitle_label.set_ellipsize(3)  # ELLIPSIZE_END
+            subtitle_label.set_max_width_chars(35)
+            subtitle_label.add_css_class("subtitle-label")
+            title_box.append(subtitle_label)
+
         self.add_prefix(title_box)
 
         # Create a fixed-width box for the scale
@@ -127,10 +158,18 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.list_box = Gtk.ListBox()
         self.list_box.add_css_class("boxed-list")
 
+        title_box = Gtk.CenterBox()
         label = Gtk.Label(label="App Volume")
         label.add_css_class("title-1")
+        title_box.set_center_widget(label)
 
-        self.main_box.append(label)
+        close_btn = Gtk.Button(label="X")
+        close_btn.add_css_class("close-btn")
+        close_btn.connect("clicked", self.on_button_clicked)
+        title_box.set_end_widget(close_btn)
+
+        # self.main_box.append(label)
+        self.main_box.append(title_box)
         self.main_box.append(self.list_box)
         self.set_content(self.main_box)
 
@@ -142,20 +181,24 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.refresh_inputs()
         GLib.timeout_add_seconds(2, self.refresh_inputs)
 
+    def on_button_clicked(self, button):
+        self.close()
+        return
+
     def on_key_pressed(self, controller, keyval, keycode, state):
-        if keyval == Gdk.KEY_Escape:
+        if keyval == Gdk.KEY_Escape or keyval == Gdk.KEY_q:
             self.close()
             return True
-        elif keyval == Gdk.KEY_Up:
+        elif keyval == Gdk.KEY_Up or keyval == Gdk.KEY_k:
             self.move_selection(-1)
             return True
-        elif keyval == Gdk.KEY_Down:
+        elif keyval == Gdk.KEY_Down or keyval == Gdk.KEY_j:
             self.move_selection(1)
             return True
-        elif keyval == Gdk.KEY_Left:
+        elif keyval == Gdk.KEY_Left or keyval == Gdk.KEY_h:
             self.adjust_selected_volume(-5)
             return True
-        elif keyval == Gdk.KEY_Right:
+        elif keyval == Gdk.KEY_Right or keyval == Gdk.KEY_l:
             self.adjust_selected_volume(5)
             return True
         return False
@@ -201,15 +244,21 @@ class VolumeOverlay(Adw.ApplicationWindow):
                     idx = lines[0].split("#")[-1].strip()
                     new_inputs.add(idx)
 
-                    name, volume = "Unknown Application", 0
+                    app_name = "Unknown Application"
+                    media_name = None
+                    volume = 0
+
                     for line in lines:
                         if "application.name =" in line:
-                            name = line.split("=")[-1].strip().strip('"')
+                            app_name = line.split("=")[-1].strip().strip('"')
+                        elif "media.name =" in line:
+                            media_name = line.split("=")[-1].strip().strip('"')
                         elif "Volume:" in line and "%" in line:
                             parts = line.split("/")
                             if len(parts) > 1:
                                 volume = int(parts[1].strip().replace("%", ""))
-                    input_data[idx] = (name, volume)
+
+                    input_data[idx] = (app_name, media_name, volume)
 
             # Only rebuild if inputs have changed
             if new_inputs != self.current_inputs:
@@ -224,9 +273,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
                     self.selected_row_index = 0
                 else:
                     for idx in sorted(input_data.keys()):
-                        name, volume = input_data[idx]
+                        app_name, media_name, volume = input_data[idx]
                         self.list_box.append(
-                            VolumeSliderRow(idx, name, volume))
+                            VolumeSliderRow(idx, app_name, media_name,
+                                            volume))
 
                     # Reset selection and select first row if available
                     self.selected_row_index = 0
