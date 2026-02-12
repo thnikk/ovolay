@@ -32,8 +32,26 @@ CSS = """
 
 class VolumeSliderRow(Adw.ActionRow):
     def __init__(self, index, name, initial_volume):
-        super().__init__(title=name)
+        super().__init__()
         self.index = index
+
+        # Create a fixed-width box for the title
+        title_box = Gtk.Box()
+        title_box.set_size_request(150, -1)  # Fixed width for program names
+        title_label = Gtk.Label()
+
+        # Truncate name if too long
+        display_name = name[:12] + "..." if len(name) > 12 else name
+        title_label.set_text(display_name)
+        title_label.set_halign(Gtk.Align.START)
+
+        title_box.append(title_label)
+        self.add_prefix(title_box)
+
+        # Create a fixed-width box for the scale
+        scale_box = Gtk.Box()
+        scale_box.set_size_request(200, -1)  # Fixed width of 200px
+
         self.adjustment = Gtk.Adjustment(
             value=initial_volume, lower=0, upper=100,
             step_increment=1, page_increment=10
@@ -42,10 +60,11 @@ class VolumeSliderRow(Adw.ActionRow):
             orientation=Gtk.Orientation.HORIZONTAL, adjustment=self.adjustment
         )
         self.scale.set_hexpand(True)
-        self.scale.set_margin_start(12)
         self.scale.set_draw_value(False)
         self.scale.connect("value-changed", self.on_volume_changed)
-        self.add_suffix(self.scale)
+
+        scale_box.append(self.scale)
+        self.add_suffix(scale_box)
 
     def on_volume_changed(self, scroll):
         volume = int(self.adjustment.get_value())
@@ -137,17 +156,17 @@ class VolumeOverlay(Adw.ApplicationWindow):
                 ["pactl", "list", "sink-inputs"], text=True
             )
             blocks = output.strip().split("\n\n")
-            
+
             # Extract current sink input indices
             new_inputs = set()
             input_data = {}
-            
+
             for block in blocks:
                 if "Sink Input #" in block:
                     lines = block.splitlines()
                     idx = lines[0].split("#")[-1].strip()
                     new_inputs.add(idx)
-                    
+
                     name, volume = "Unknown Application", 0
                     for line in lines:
                         if "application.name =" in line:
@@ -157,7 +176,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
                             if len(parts) > 1:
                                 volume = int(parts[1].strip().replace("%", ""))
                     input_data[idx] = (name, volume)
-            
+
             # Only rebuild if inputs have changed
             if new_inputs != self.current_inputs:
                 self.current_inputs = new_inputs
@@ -165,7 +184,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
                 for idx in sorted(input_data.keys()):
                     name, volume = input_data[idx]
                     self.list_box.append(VolumeSliderRow(idx, name, volume))
-            
+
         except Exception:
             pass
         return True
