@@ -87,7 +87,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
                      Gtk4LayerShell.Edge.TOP, Gtk4LayerShell.Edge.BOTTOM]:
             Gtk4LayerShell.set_anchor(self, edge, False)
 
-        self.set_default_size(500, 400)
+        self.set_default_size(500, -1)
         self.add_css_class("overlay-window")
 
         # Main Layout
@@ -101,17 +101,18 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.list_box = Gtk.ListBox()
         self.list_box.add_css_class("boxed-list")
 
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_child(self.list_box)
-        scrolled.set_vexpand(True)
-        scrolled.set_propagate_natural_height(True)
-        scrolled.set_min_content_height(250)
+        # scrolled = Gtk.ScrolledWindow()
+        # scrolled.set_child(self.list_box)
+        # scrolled.set_vexpand(True)
+        # scrolled.set_propagate_natural_height(True)
+        # scrolled.set_min_content_height(250)
 
-        label = Gtk.Label(label="Application Volumes")
+        label = Gtk.Label(label="App Volume")
         label.add_css_class("title-1")
 
         self.main_box.append(label)
-        self.main_box.append(scrolled)
+        # self.main_box.append(scrolled)
+        self.main_box.append(self.list_box)
         self.set_content(self.main_box)
 
         # Key Controller
