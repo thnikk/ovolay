@@ -71,6 +71,11 @@ class VolumeSliderRow(Adw.ActionRow):
         subprocess.run(["pactl", "set-sink-input-volume",
                        str(self.index), f"{volume}%"])
 
+    def adjust_volume(self, delta):
+        current = int(self.adjustment.get_value())
+        new = max(0, min(100, current + delta))
+        self.adjustment.set_value(new)
+
 
 class ScrimWindow(Gtk.Window):
     """A full-screen transparent window to dim the background."""
@@ -94,6 +99,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
         super().__init__(**kwargs)
         self.scrim = scrim
         self.current_inputs = set()  # Track current sink input indices
+        self.selected_row_index = 0  # Track selected row for keyboard navigation
 
         # Layer Shell Configuration
         Gtk4LayerShell.init_for_window(self)
@@ -148,7 +154,42 @@ class VolumeOverlay(Adw.ApplicationWindow):
             self.scrim.close()
             self.close()
             return True
+        elif keyval == Gdk.KEY_Up:
+            self.move_selection(-1)
+            return True
+        elif keyval == Gdk.KEY_Down:
+            self.move_selection(1)
+            return True
+        elif keyval == Gdk.KEY_Left:
+            self.adjust_selected_volume(-5)
+            return True
+        elif keyval == Gdk.KEY_Right:
+            self.adjust_selected_volume(5)
+            return True
         return False
+
+    def move_selection(self, direction):
+        rows = self.list_box.get_first_child()
+        if not rows:
+            return
+        
+        # Count total rows
+        count = 0
+        row = rows
+        while row:
+            count += 1
+            row = row.get_next_sibling()
+        
+        # Update selected index
+        self.selected_row_index = (self.selected_row_index + direction) % count
+        
+        # Select the row
+        self.list_box.select_row(self.list_box.get_row_at_index(self.selected_row_index))
+
+    def adjust_selected_volume(self, delta):
+        selected_row = self.list_box.get_selected_row()
+        if selected_row and hasattr(selected_row, 'adjust_volume'):
+            selected_row.adjust_volume(delta)
 
     def refresh_inputs(self):
         try:
@@ -184,6 +225,11 @@ class VolumeOverlay(Adw.ApplicationWindow):
                 for idx in sorted(input_data.keys()):
                     name, volume = input_data[idx]
                     self.list_box.append(VolumeSliderRow(idx, name, volume))
+                
+                # Reset selection and select first row if available
+                self.selected_row_index = 0
+                if self.list_box.get_first_child():
+                    self.list_box.select_row(self.list_box.get_row_at_index(0))
 
         except Exception:
             pass
