@@ -35,6 +35,14 @@ CSS = """
     min-height: 0;
     border-radius: 10px;
 }
+
+.boxed-list row:selected {
+    outline: none;
+}
+
+.boxed-list row:focus {
+    outline: none;
+}
 """
 
 
