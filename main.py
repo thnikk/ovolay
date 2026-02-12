@@ -22,8 +22,9 @@ CSS = """
     # background-color: @window_bg_color;
     background-color: alpha(#1c1f26, 0.9);
     color: #d8dee9;
-    border-radius: 24px;
+    border-radius: 30px;
     border: 1px solid @borders;
+    padding: 20px;
 }
 
 .title-1 {
@@ -32,6 +33,7 @@ CSS = """
 
 .boxed-list {
     min-height: 0;
+    border-radius: 10px;
 }
 """
 
@@ -111,11 +113,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
 
         # Main Layout
         self.main_box = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        self.main_box.set_margin_top(24)
-        self.main_box.set_margin_bottom(24)
-        self.main_box.set_margin_start(24)
-        self.main_box.set_margin_end(24)
+            orientation=Gtk.Orientation.VERTICAL, spacing=20)
 
         self.list_box = Gtk.ListBox()
         self.list_box.add_css_class("boxed-list")
