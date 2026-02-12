@@ -77,6 +77,7 @@ class VolumeSliderRow(Adw.ActionRow):
         )
         self.scale.set_hexpand(True)
         self.scale.set_draw_value(False)
+        self.scale.set_focusable(False)
         self.scale.connect("value-changed", self.on_volume_changed)
 
         scale_box.append(self.scale)
