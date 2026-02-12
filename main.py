@@ -29,6 +29,10 @@ CSS = """
 .title-1 {
     font-weight: normal;
 }
+
+.boxed-list {
+    min-height: 0;
+}
 """
 
 
@@ -82,7 +86,7 @@ class VolumeSliderRow(Adw.ActionRow):
 class VolumeOverlay(Adw.ApplicationWindow):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.current_inputs = set()  # Track current sink input indices
+        self.current_inputs = None  # Track current sink input indices
         self.selected_row_index = 0  # Track selected row for keyboard navigation
 
         # Layer Shell Configuration
@@ -101,7 +105,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
                      Gtk4LayerShell.Edge.TOP, Gtk4LayerShell.Edge.BOTTOM]:
             Gtk4LayerShell.set_anchor(self, edge, False)
 
-        self.set_default_size(500, -1)
+        self.set_default_size(500, 1)
+        self.set_size_request(500, -1)
         self.add_css_class("overlay-window")
 
         # Main Layout
@@ -203,14 +208,24 @@ class VolumeOverlay(Adw.ApplicationWindow):
             if new_inputs != self.current_inputs:
                 self.current_inputs = new_inputs
                 self.list_box.remove_all()
-                for idx in sorted(input_data.keys()):
-                    name, volume = input_data[idx]
-                    self.list_box.append(VolumeSliderRow(idx, name, volume))
 
-                # Reset selection and select first row if available
-                self.selected_row_index = 0
-                if self.list_box.get_first_child():
-                    self.list_box.select_row(self.list_box.get_row_at_index(0))
+                if not input_data:
+                    # Show placeholder when no sink inputs
+                    placeholder = Adw.ActionRow()
+                    placeholder.set_title("No sink inputs")
+                    self.list_box.append(placeholder)
+                    self.selected_row_index = 0
+                else:
+                    for idx in sorted(input_data.keys()):
+                        name, volume = input_data[idx]
+                        self.list_box.append(
+                            VolumeSliderRow(idx, name, volume))
+
+                    # Reset selection and select first row if available
+                    self.selected_row_index = 0
+                    if self.list_box.get_first_child():
+                        self.list_box.select_row(
+                            self.list_box.get_row_at_index(0))
 
         except Exception:
             pass
