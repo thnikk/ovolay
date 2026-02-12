@@ -18,14 +18,16 @@ from gi.repository import Gtk, Gdk, Adw, Gtk4LayerShell, GLib  # noqa
 # Custom CSS for rounded corners and the dimming effect
 CSS = """
 .overlay-window {
-    background-color: @window_bg_color;
+    font-family: Nunito;
+    # background-color: @window_bg_color;
+    background-color: alpha(#1c1f26, 0.9);
+    color: #d8dee9;
     border-radius: 24px;
     border: 1px solid @borders;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
 
-.scrim {
-    background-color: rgba(0, 0, 0, 0.5);
+.title-1 {
+    font-weight: normal;
 }
 """
 
@@ -77,36 +79,22 @@ class VolumeSliderRow(Adw.ActionRow):
         self.adjustment.set_value(new)
 
 
-class ScrimWindow(Gtk.Window):
-    """A full-screen transparent window to dim the background."""
-
+class VolumeOverlay(Adw.ApplicationWindow):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        Gtk4LayerShell.init_for_window(self)
-        Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.TOP)
-
-        # Fill the entire screen
-        Gtk4LayerShell.set_anchor(self, Gtk4LayerShell.Edge.LEFT, True)
-        Gtk4LayerShell.set_anchor(self, Gtk4LayerShell.Edge.RIGHT, True)
-        Gtk4LayerShell.set_anchor(self, Gtk4LayerShell.Edge.TOP, True)
-        Gtk4LayerShell.set_anchor(self, Gtk4LayerShell.Edge.BOTTOM, True)
-
-        self.add_css_class("scrim")
-
-
-class VolumeOverlay(Adw.ApplicationWindow):
-    def __init__(self, scrim, **kwargs):
-        super().__init__(**kwargs)
-        self.scrim = scrim
         self.current_inputs = set()  # Track current sink input indices
         self.selected_row_index = 0  # Track selected row for keyboard navigation
 
         # Layer Shell Configuration
         Gtk4LayerShell.init_for_window(self)
-        # Place above the scrim
-        Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.OVERLAY)
         Gtk4LayerShell.set_keyboard_mode(
             self, Gtk4LayerShell.KeyboardMode.EXCLUSIVE)
+        Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.OVERLAY)
+
+        # Close window when it loses focus
+        focus_controller = Gtk.EventControllerFocus()
+        focus_controller.connect("leave", lambda controller: self.close())
+        self.add_controller(focus_controller)
 
         # Center the window
         for edge in [Gtk4LayerShell.Edge.LEFT, Gtk4LayerShell.Edge.RIGHT,
@@ -127,17 +115,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.list_box = Gtk.ListBox()
         self.list_box.add_css_class("boxed-list")
 
-        # scrolled = Gtk.ScrolledWindow()
-        # scrolled.set_child(self.list_box)
-        # scrolled.set_vexpand(True)
-        # scrolled.set_propagate_natural_height(True)
-        # scrolled.set_min_content_height(250)
-
         label = Gtk.Label(label="App Volume")
         label.add_css_class("title-1")
 
         self.main_box.append(label)
-        # self.main_box.append(scrolled)
         self.main_box.append(self.list_box)
         self.set_content(self.main_box)
 
@@ -151,7 +132,6 @@ class VolumeOverlay(Adw.ApplicationWindow):
 
     def on_key_pressed(self, controller, keyval, keycode, state):
         if keyval == Gdk.KEY_Escape:
-            self.scrim.close()
             self.close()
             return True
         elif keyval == Gdk.KEY_Up:
@@ -172,19 +152,20 @@ class VolumeOverlay(Adw.ApplicationWindow):
         rows = self.list_box.get_first_child()
         if not rows:
             return
-        
+
         # Count total rows
         count = 0
         row = rows
         while row:
             count += 1
             row = row.get_next_sibling()
-        
+
         # Update selected index
         self.selected_row_index = (self.selected_row_index + direction) % count
-        
+
         # Select the row
-        self.list_box.select_row(self.list_box.get_row_at_index(self.selected_row_index))
+        self.list_box.select_row(
+            self.list_box.get_row_at_index(self.selected_row_index))
 
     def adjust_selected_volume(self, delta):
         selected_row = self.list_box.get_selected_row()
@@ -225,7 +206,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
                 for idx in sorted(input_data.keys()):
                     name, volume = input_data[idx]
                     self.list_box.append(VolumeSliderRow(idx, name, volume))
-                
+
                 # Reset selection and select first row if available
                 self.selected_row_index = 0
                 if self.list_box.get_first_child():
@@ -238,7 +219,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
 
 class Application(Adw.Application):
     def __init__(self):
-        super().__init__(application_id="com.example.VolumeOverlay")
+        super().__init__(application_id="com.thnikk.VolumeOverlay")
 
     def do_activate(self):
         # Load CSS
@@ -250,12 +231,8 @@ class Application(Adw.Application):
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
-        # Create and show the scrim first
-        self.scrim = ScrimWindow(application=self)
-        self.scrim.present()
-
         # Create and show the overlay
-        self.win = VolumeOverlay(scrim=self.scrim, application=self)
+        self.win = VolumeOverlay(application=self)
         self.win.present()
 
 
