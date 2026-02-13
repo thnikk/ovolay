@@ -26,6 +26,10 @@ CSS = """
     padding: 20px;
 }
 
+.volume-row {
+    # padding: 0px;
+}
+
 .title-1 {
     font-size: 24px;
     font-weight: normal;
@@ -58,13 +62,33 @@ CSS = """
     border-radius: 50px;
 }
 .close-btn:selected {outline: none;}
+
+.mute-btn {
+    border-radius: 50%;
+    # padding: 8px;
+}
+
+.mute-btn.muted {
+    background-color: alpha(red, 0.3);
+}
+
+scale.muted trough {
+    opacity: 0.3;
+}
+
+scale.muted highlight {
+    opacity: 0.3;
+}
 """
 
 
 class VolumeSliderRow(Adw.ActionRow):
-    def __init__(self, index, app_name, media_name, initial_volume):
+    def __init__(self, index, app_name, media_name, initial_volume,
+                 is_muted):
         super().__init__()
         self.index = index
+        self.is_muted = is_muted
+        self.add_css_class("volume-row")
 
         # Create title/subtitle box with fixed width
         title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -114,6 +138,16 @@ class VolumeSliderRow(Adw.ActionRow):
         scale_box.append(self.scale)
         self.add_suffix(scale_box)
 
+        # Add mute button
+        self.mute_button = Gtk.Button()
+        self.mute_button.set_focusable(False)
+        self.mute_button.set_valign(Gtk.Align.CENTER)
+        self.mute_button.set_vexpand(False)
+        self.mute_button.add_css_class("mute-btn")
+        self.update_mute_icon()
+        self.mute_button.connect("clicked", self.on_mute_clicked)
+        self.add_suffix(self.mute_button)
+
     def on_volume_changed(self, scroll):
         volume = int(self.adjustment.get_value())
         subprocess.run(["pactl", "set-sink-input-volume",
@@ -123,6 +157,28 @@ class VolumeSliderRow(Adw.ActionRow):
         current = int(self.adjustment.get_value())
         new = max(0, min(100, current + delta))
         self.adjustment.set_value(new)
+
+    def on_mute_clicked(self, button):
+        self.toggle_mute()
+
+    def toggle_mute(self):
+        self.is_muted = not self.is_muted
+        mute_state = "1" if self.is_muted else "0"
+        subprocess.run(["pactl", "set-sink-input-mute",
+                       str(self.index), mute_state])
+        self.update_mute_icon()
+
+    def update_mute_icon(self):
+        icon = "audio-volume-muted" if self.is_muted else "audio-volume-high"
+        self.mute_button.set_icon_name(icon)
+
+        # Update button and scale appearance
+        if self.is_muted:
+            self.mute_button.add_css_class("muted")
+            self.scale.add_css_class("muted")
+        else:
+            self.mute_button.remove_css_class("muted")
+            self.scale.remove_css_class("muted")
 
 
 class VolumeOverlay(Adw.ApplicationWindow):
@@ -202,6 +258,9 @@ class VolumeOverlay(Adw.ApplicationWindow):
         elif keyval == Gdk.KEY_Right or keyval == Gdk.KEY_l:
             self.adjust_selected_volume(5)
             return True
+        elif keyval == Gdk.KEY_m:
+            self.toggle_selected_mute()
+            return True
         return False
 
     def move_selection(self, direction):
@@ -228,6 +287,11 @@ class VolumeOverlay(Adw.ApplicationWindow):
         if selected_row and hasattr(selected_row, 'adjust_volume'):
             selected_row.adjust_volume(delta)
 
+    def toggle_selected_mute(self):
+        selected_row = self.list_box.get_selected_row()
+        if selected_row and hasattr(selected_row, 'toggle_mute'):
+            selected_row.toggle_mute()
+
     def refresh_inputs(self):
         try:
             output = subprocess.check_output(
@@ -248,6 +312,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
                     app_name = "Unknown Application"
                     media_name = None
                     volume = 0
+                    is_muted = False
 
                     for line in lines:
                         if "application.name =" in line:
@@ -258,8 +323,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
                             parts = line.split("/")
                             if len(parts) > 1:
                                 volume = int(parts[1].strip().replace("%", ""))
+                        elif "Mute:" in line:
+                            is_muted = "yes" in line.lower()
 
-                    input_data[idx] = (app_name, media_name, volume)
+                    input_data[idx] = (app_name, media_name, volume, is_muted)
 
             # Only rebuild if inputs have changed
             if new_inputs != self.current_inputs:
@@ -274,10 +341,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
                     self.selected_row_index = 0
                 else:
                     for idx in sorted(input_data.keys()):
-                        app_name, media_name, volume = input_data[idx]
+                        app_name, media_name, volume, is_muted = input_data[idx]
                         self.list_box.append(
                             VolumeSliderRow(idx, app_name, media_name,
-                                            volume))
+                                            volume, is_muted))
 
                     # Reset selection and select first row if available
                     self.selected_row_index = 0
