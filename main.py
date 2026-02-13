@@ -261,6 +261,11 @@ class VolumeOverlay(Adw.ApplicationWindow):
         elif keyval == Gdk.KEY_m:
             self.toggle_selected_mute()
             return True
+        elif keyval >= Gdk.KEY_1 and keyval <= Gdk.KEY_9:
+            # Number keys 1-9 select corresponding items
+            index = keyval - Gdk.KEY_1  # 1 maps to index 0, 2 to 1, etc.
+            self.select_by_index(index)
+            return True
         return False
 
     def move_selection(self, direction):
@@ -281,6 +286,24 @@ class VolumeOverlay(Adw.ApplicationWindow):
         # Select the row
         self.list_box.select_row(
             self.list_box.get_row_at_index(self.selected_row_index))
+
+    def select_by_index(self, index):
+        rows = self.list_box.get_first_child()
+        if not rows:
+            return
+
+        # Count total rows
+        count = 0
+        row = rows
+        while row:
+            count += 1
+            row = row.get_next_sibling()
+
+        # Only select if index is valid
+        if index < count:
+            self.selected_row_index = index
+            self.list_box.select_row(
+                self.list_box.get_row_at_index(self.selected_row_index))
 
     def adjust_selected_volume(self, delta):
         selected_row = self.list_box.get_selected_row()
