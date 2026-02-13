@@ -54,7 +54,7 @@ CSS = """
 }
 
 .close-btn {
-    padding: 5px 10px;
+    padding: 5px 5px;
     border-radius: 50px;
 }
 .close-btn:selected {outline: none;}
@@ -129,7 +129,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.current_inputs = None  # Track current sink input indices
-        self.selected_row_index = 0  # Track selected row for keyboard navigation
+        self.selected_row_index = 0  # Track selected row for keyboard nav
 
         # Layer Shell Configuration
         Gtk4LayerShell.init_for_window(self)
@@ -163,7 +163,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
         label.add_css_class("title-1")
         title_box.set_center_widget(label)
 
-        close_btn = Gtk.Button(label="X")
+        close_btn = Gtk.Button.new_from_icon_name("window-close")
+        close_btn.set_focusable(False)
         close_btn.add_css_class("close-btn")
         close_btn.connect("clicked", self.on_button_clicked)
         title_box.set_end_widget(close_btn)
