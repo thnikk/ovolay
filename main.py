@@ -19,7 +19,7 @@ from gi.repository import Gtk, Gdk, Adw, Gtk4LayerShell, GLib  # noqa
 CSS = """
 .overlay-window {
     font-family: Nunito;
-    background-color: alpha(#1c1f26, 0.95);
+    background-color: alpha(#1c1f26, 0.9);
     color: #d8dee9;
     border-radius: 25px;
     border: 1px solid @borders;
@@ -57,7 +57,7 @@ CSS = """
 }
 
 .volume-row-content {
-    padding: 10px 15px;
+    padding-left: 10px;
 }
 
 .boxed-list {
@@ -67,12 +67,12 @@ CSS = """
 
 .title-label {
     font-size: 16px;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .subtitle-label {
     font-size: 12px;
-    opacity: 0.8;
+    opacity: 0.6;
 }
 """
 
