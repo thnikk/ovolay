@@ -398,7 +398,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
         elif keyval == Gdk.KEY_Right or keyval == Gdk.KEY_l:
             self.adjust_selected_volume(5)
             return True
-        elif keyval == Gdk.KEY_m:
+        elif keyval == Gdk.KEY_m or keyval == Gdk.KEY_space:
             self.toggle_selected_mute()
             return True
         elif keyval >= Gdk.KEY_1 and keyval <= Gdk.KEY_9:
