@@ -19,28 +19,61 @@ from gi.repository import Gtk, Gdk, Adw, Gtk4LayerShell, GLib  # noqa
 CSS = """
 .overlay-window {
     font-family: Nunito;
-    background-color: alpha(#1c1f26, 0.9);
+    background-color: alpha(#1c1f26, 0.95);
     color: #d8dee9;
-    border-radius: 30px;
+    border-radius: 15px;
     border: 1px solid @borders;
-    padding: 20px;
+    padding: 10px;
 }
 
 .volume-row {
+    background-color: transparent;
+    border-radius: 10px;
+    margin-bottom: 5px;
+    padding: 0;
 }
 
-.title-1 {
-    font-size: 24px;
-    font-weight: normal;
+.volume-progress trough {
+    background-color: alpha(#ffffff, 0.15);
+    border: none;
+    min-height: 50px;
+    border-radius: 10px;
+    transition: background-color 0.15s;
+}
+
+.volume-row:selected .volume-progress trough,
+.volume-row.selected .volume-progress trough {
+    background-color: alpha(#ffffff, 0.3);
+}
+
+.volume-progress progress {
+    background-color: alpha(#3584e4, 0.2);
+    border-radius: 10px 0 0 10px;
+    border: none;
+    min-height: 50px;
+}
+
+.volume-progress.muted progress {
+    background-color: alpha(red, 0.1);
+}
+
+.volume-row-content {
+    padding: 10px 15px;
 }
 
 .boxed-list {
+    background-color: transparent;
     min-height: 0;
-    border-radius: 10px;
+}
+
+.boxed-list > row {
+    background-color: transparent;
+    padding: 0;
 }
 
 .boxed-list row:selected {
     outline: none;
+    background-color: transparent;
 }
 
 .boxed-list row:focus {
@@ -49,134 +82,145 @@ CSS = """
 
 .title-label {
     font-size: 16px;
+    font-weight: bold;
 }
 
 .subtitle-label {
     font-size: 12px;
-    opacity: 0.6;
-}
-
-.close-btn {
-    padding: 5px 5px;
-    border-radius: 50px;
-}
-.close-btn:selected {outline: none;}
-
-.mute-btn {
-    border-radius: 50%;
-}
-
-.mute-btn.muted {
-    background-color: alpha(red, 0.3);
-}
-
-scale.muted trough {
-    opacity: 0.3;
-}
-
-scale.muted highlight {
-    opacity: 0.3;
+    opacity: 0.8;
 }
 """
 
 
-class VolumeSliderRow(Adw.ActionRow):
+class VolumeSliderRow(Gtk.ListBoxRow):
     def __init__(self, index, app_name, media_name, initial_volume,
                  is_muted):
         super().__init__()
         self.index = index
         self.is_muted = is_muted
+        self.volume = initial_volume
         self.add_css_class("volume-row")
 
-        # Create title/subtitle box with fixed width
+        # Use an overlay to put content over a progress bar background
+        overlay = Gtk.Overlay()
+        
+        # Background progress bar for volume level
+        self.progress_bar = Gtk.ProgressBar()
+        self.progress_bar.set_fraction(initial_volume / 100.0)
+        self.progress_bar.add_css_class("volume-progress")
+        overlay.set_child(self.progress_bar)
+
+        # Content box
+        content_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        content_box.add_css_class("volume-row-content")
+        
+        # Create title/subtitle box
         title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        title_box.set_size_request(250, -1)
-        title_box.set_hexpand(False)
+        title_box.set_hexpand(True)
+        title_box.set_valign(Gtk.Align.CENTER)
 
         title_label = Gtk.Label()
         title_label.set_text(app_name)
         title_label.set_halign(Gtk.Align.START)
-        title_label.set_valign(Gtk.Align.FILL)
-        title_label.set_vexpand(True)
-        title_label.set_ellipsize(3)  # ELLIPSIZE_END
+        title_label.set_ellipsize(3)
         title_label.set_max_width_chars(30)
         title_label.add_css_class("title-label")
         title_box.append(title_label)
 
-        # Add subtitle if present and different
         if media_name and media_name != app_name:
             subtitle_label = Gtk.Label()
             subtitle_label.set_text(media_name)
             subtitle_label.set_halign(Gtk.Align.START)
-            subtitle_label.set_valign(Gtk.Align.START)
-            subtitle_label.set_vexpand(True)
-            subtitle_label.set_ellipsize(3)  # ELLIPSIZE_END
+            subtitle_label.set_ellipsize(3)
             subtitle_label.set_max_width_chars(35)
             subtitle_label.add_css_class("subtitle-label")
             title_box.append(subtitle_label)
 
-        self.add_prefix(title_box)
+        content_box.append(title_box)
 
-        # Create a fixed-width box for the scale
-        scale_box = Gtk.Box()
-        scale_box.set_size_request(200, -1)  # Fixed width of 200px
+        overlay.add_overlay(content_box)
+        self.set_child(overlay)
 
         self.adjustment = Gtk.Adjustment(
             value=initial_volume, lower=0, upper=100,
             step_increment=1, page_increment=10
         )
-        self.scale = Gtk.Scale(
-            orientation=Gtk.Orientation.HORIZONTAL, adjustment=self.adjustment
-        )
-        self.scale.set_hexpand(True)
-        self.scale.set_draw_value(False)
-        self.scale.set_focusable(False)
-        self.scale.connect("value-changed", self.on_volume_changed)
+        self.adjustment.connect("value-changed", self.on_volume_changed)
+        
+        # Add scroll controller for volume adjustment
+        sc = Gtk.EventControllerScroll.new(
+            Gtk.EventControllerScrollFlags.VERTICAL)
+        sc.connect("scroll", self.on_scroll)
+        self.add_controller(sc)
 
-        scale_box.append(self.scale)
-        self.add_suffix(scale_box)
+        # Left click drag to set/drag volume
+        self.drag_gesture = Gtk.GestureDrag.new()
+        self.drag_gesture.set_button(1)
+        self.drag_gesture.connect("drag-begin", self.on_drag_begin)
+        self.drag_gesture.connect("drag-update", self.on_drag_update)
+        self.add_controller(self.drag_gesture)
 
-        # Add mute button
-        self.mute_button = Gtk.Button()
-        self.mute_button.set_focusable(False)
-        self.mute_button.set_valign(Gtk.Align.CENTER)
-        self.mute_button.set_vexpand(False)
-        self.mute_button.add_css_class("mute-btn")
-        self.update_mute_icon()
-        self.mute_button.connect("clicked", self.on_mute_clicked)
-        self.add_suffix(self.mute_button)
+        # Right click to mute
+        self.right_click_gesture = Gtk.GestureClick.new()
+        self.right_click_gesture.set_button(3)
+        self.right_click_gesture.connect("pressed", self.on_right_click)
+        self.add_controller(self.right_click_gesture)
 
-    def on_volume_changed(self, scroll):
-        volume = int(self.adjustment.get_value())
+        self.update_ui()
+
+    def update_volume_from_x(self, x):
+        width = self.get_width()
+        if width > 0:
+            volume = max(0, min(100, (x / width) * 100))
+            self.adjustment.set_value(volume)
+
+    def on_drag_begin(self, gesture, start_x, start_y):
+        self.update_volume_from_x(start_x)
+
+    def on_drag_update(self, gesture, offset_x, offset_y):
+        success, start_x, start_y = gesture.get_start_point()
+        if success:
+            self.update_volume_from_x(start_x + offset_x)
+
+    def on_right_click(self, gesture, n_press, x, y):
+        self.toggle_mute()
+
+    def on_scroll(self, controller, dx, dy):
+        self.adjust_volume(-dy * 2)
+        return True
+
+    def update_ui(self):
+        volume_percent = self.adjustment.get_value()
+        self.progress_bar.set_fraction(volume_percent / 100.0)
+        
+        # Manually force background color if selection doesn't apply correctly
+        if self.is_selected():
+            self.add_css_class("selected")
+        else:
+            self.remove_css_class("selected")
+
+        if self.is_muted:
+            self.progress_bar.add_css_class("muted")
+        else:
+            self.progress_bar.remove_css_class("muted")
+
+    def on_volume_changed(self, adjustment):
+        volume = int(adjustment.get_value())
         subprocess.run(["pactl", "set-sink-input-volume",
                        str(self.index), f"{volume}%"])
+        self.update_ui()
 
     def adjust_volume(self, delta):
-        current = int(self.adjustment.get_value())
+        current = self.adjustment.get_value()
         new = max(0, min(100, current + delta))
         self.adjustment.set_value(new)
-
-    def on_mute_clicked(self, button):
-        self.toggle_mute()
 
     def toggle_mute(self):
         self.is_muted = not self.is_muted
         mute_state = "1" if self.is_muted else "0"
         subprocess.run(["pactl", "set-sink-input-mute",
                        str(self.index), mute_state])
-        self.update_mute_icon()
-
-    def update_mute_icon(self):
-        icon = "audio-volume-muted" if self.is_muted else "audio-volume-high"
-        self.mute_button.set_icon_name(icon)
-
-        # Update button and scale appearance
-        if self.is_muted:
-            self.mute_button.add_css_class("muted")
-            self.scale.add_css_class("muted")
-        else:
-            self.mute_button.remove_css_class("muted")
-            self.scale.remove_css_class("muted")
+        self.update_ui()
 
 
 class VolumeOverlay(Adw.ApplicationWindow):
@@ -188,7 +232,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
         # Layer Shell Configuration
         Gtk4LayerShell.init_for_window(self)
         Gtk4LayerShell.set_keyboard_mode(
-            self, Gtk4LayerShell.KeyboardMode.EXCLUSIVE)
+            self, Gtk4LayerShell.KeyboardMode.ON_DEMAND)
         Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.OVERLAY)
         Gtk4LayerShell.set_namespace(self, "volume-overlay")
 
@@ -208,24 +252,12 @@ class VolumeOverlay(Adw.ApplicationWindow):
 
         # Main Layout
         self.main_box = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=20)
+            orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
         self.list_box = Gtk.ListBox()
         self.list_box.add_css_class("boxed-list")
+        self.list_box.connect("row-selected", self.on_row_selected)
 
-        title_box = Gtk.CenterBox()
-        label = Gtk.Label(label="App Volume")
-        label.add_css_class("title-1")
-        title_box.set_center_widget(label)
-
-        close_btn = Gtk.Button.new_from_icon_name("window-close")
-        close_btn.set_focusable(False)
-        close_btn.add_css_class("close-btn")
-        close_btn.connect("clicked", self.on_button_clicked)
-        title_box.set_end_widget(close_btn)
-
-        # self.main_box.append(label)
-        self.main_box.append(title_box)
         self.main_box.append(self.list_box)
         self.set_content(self.main_box)
 
@@ -236,6 +268,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
 
         self.refresh_inputs()
         GLib.timeout_add_seconds(2, self.refresh_inputs)
+
+    def on_row_selected(self, listbox, row):
+        # Update all rows because selection changed
+        self.update_all_rows()
 
     def on_button_clicked(self, button):
         self.close()
@@ -283,8 +319,15 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.selected_row_index = (self.selected_row_index + direction) % count
 
         # Select the row
-        self.list_box.select_row(
-            self.list_box.get_row_at_index(self.selected_row_index))
+        target_row = self.list_box.get_row_at_index(self.selected_row_index)
+        self.list_box.select_row(target_row)
+        
+        # Trigger UI update for all rows to refresh selected state
+        current = self.list_box.get_first_child()
+        while current:
+            if hasattr(current, 'update_ui'):
+                current.update_ui()
+            current = current.get_next_sibling()
 
     def select_by_index(self, index):
         rows = self.list_box.get_first_child()
@@ -303,6 +346,13 @@ class VolumeOverlay(Adw.ApplicationWindow):
             self.selected_row_index = index
             self.list_box.select_row(
                 self.list_box.get_row_at_index(self.selected_row_index))
+            
+            # Trigger UI update for all rows
+            current = self.list_box.get_first_child()
+            while current:
+                if hasattr(current, 'update_ui'):
+                    current.update_ui()
+                current = current.get_next_sibling()
 
     def adjust_selected_volume(self, delta):
         selected_row = self.list_box.get_selected_row()
@@ -373,10 +423,20 @@ class VolumeOverlay(Adw.ApplicationWindow):
                     if self.list_box.get_first_child():
                         self.list_box.select_row(
                             self.list_box.get_row_at_index(0))
+                    
+                    # Refresh UI for all rows to ensure selection class is correct
+                    GLib.idle_add(self.update_all_rows)
 
         except Exception:
             pass
         return True
+
+    def update_all_rows(self):
+        row = self.list_box.get_first_child()
+        while row:
+            if hasattr(row, 'update_ui'):
+                row.update_ui()
+            row = row.get_next_sibling()
 
 
 class Application(Adw.Application):
