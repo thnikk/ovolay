@@ -27,7 +27,6 @@ CSS = """
 }
 
 .volume-row {
-    # padding: 0px;
 }
 
 .title-1 {
@@ -65,7 +64,6 @@ CSS = """
 
 .mute-btn {
     border-radius: 50%;
-    # padding: 8px;
 }
 
 .mute-btn.muted {
@@ -192,6 +190,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
         Gtk4LayerShell.set_keyboard_mode(
             self, Gtk4LayerShell.KeyboardMode.EXCLUSIVE)
         Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.OVERLAY)
+        Gtk4LayerShell.set_namespace(self, "volume-overlay")
 
         # Close window when it loses focus
         focus_controller = Gtk.EventControllerFocus()
