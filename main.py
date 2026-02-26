@@ -21,20 +21,19 @@ CSS = """
     font-family: Nunito;
     background-color: alpha(#1c1f26, 0.95);
     color: #d8dee9;
-    border-radius: 15px;
+    border-radius: 25px;
     border: 1px solid @borders;
-    padding: 10px;
+    padding: 15px;
 }
 
 .volume-row {
     background-color: transparent;
     border-radius: 10px;
-    margin-bottom: 5px;
     padding: 0;
 }
 
 .volume-progress trough {
-    background-color: alpha(#ffffff, 0.15);
+    background-color: alpha(#ffffff, 0.1);
     border: none;
     min-height: 50px;
     border-radius: 10px;
@@ -43,7 +42,7 @@ CSS = """
 
 .volume-row:selected .volume-progress trough,
 .volume-row.selected .volume-progress trough {
-    background-color: alpha(#ffffff, 0.3);
+    background-color: alpha(#ffffff, 0.2);
 }
 
 .volume-progress progress {
@@ -66,20 +65,6 @@ CSS = """
     min-height: 0;
 }
 
-.boxed-list > row {
-    background-color: transparent;
-    padding: 0;
-}
-
-.boxed-list row:selected {
-    outline: none;
-    background-color: transparent;
-}
-
-.boxed-list row:focus {
-    outline: none;
-}
-
 .title-label {
     font-size: 16px;
     font-weight: bold;
@@ -92,14 +77,16 @@ CSS = """
 """
 
 
-class VolumeSliderRow(Gtk.ListBoxRow):
+class VolumeSliderRow(Gtk.Box):
     def __init__(self, index, app_name, media_name, initial_volume,
                  is_muted):
-        super().__init__()
+        super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.index = index
         self.is_muted = is_muted
         self.volume = initial_volume
+        self.is_selected_item = False
         self.add_css_class("volume-row")
+        self.set_hexpand(True)
 
         # Use an overlay to put content over a progress bar background
         overlay = Gtk.Overlay()
@@ -111,7 +98,8 @@ class VolumeSliderRow(Gtk.ListBoxRow):
         overlay.set_child(self.progress_bar)
 
         # Content box
-        content_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        content_box = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         content_box.add_css_class("volume-row-content")
         
         # Create title/subtitle box
@@ -139,7 +127,7 @@ class VolumeSliderRow(Gtk.ListBoxRow):
         content_box.append(title_box)
 
         overlay.add_overlay(content_box)
-        self.set_child(overlay)
+        self.append(overlay)
 
         self.adjustment = Gtk.Adjustment(
             value=initial_volume, lower=0, upper=100,
@@ -189,12 +177,15 @@ class VolumeSliderRow(Gtk.ListBoxRow):
         self.adjust_volume(-dy * 2)
         return True
 
+    def set_selected(self, selected):
+        self.is_selected_item = selected
+        self.update_ui()
+
     def update_ui(self):
         volume_percent = self.adjustment.get_value()
         self.progress_bar.set_fraction(volume_percent / 100.0)
         
-        # Manually force background color if selection doesn't apply correctly
-        if self.is_selected():
+        if self.is_selected_item:
             self.add_css_class("selected")
         else:
             self.remove_css_class("selected")
@@ -254,9 +245,9 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.main_box = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
-        self.list_box = Gtk.ListBox()
+        self.list_box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.list_box.add_css_class("boxed-list")
-        self.list_box.connect("row-selected", self.on_row_selected)
 
         self.main_box.append(self.list_box)
         self.set_content(self.main_box)
@@ -269,100 +260,58 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.refresh_inputs()
         GLib.timeout_add_seconds(2, self.refresh_inputs)
 
-    def on_row_selected(self, listbox, row):
-        # Update all rows because selection changed
-        self.update_all_rows()
-
-    def on_button_clicked(self, button):
-        self.close()
-        return
-
-    def on_key_pressed(self, controller, keyval, keycode, state):
-        if keyval == Gdk.KEY_Escape or keyval == Gdk.KEY_q:
-            self.close()
-            return True
-        elif keyval == Gdk.KEY_Up or keyval == Gdk.KEY_k:
-            self.move_selection(-1)
-            return True
-        elif keyval == Gdk.KEY_Down or keyval == Gdk.KEY_j:
-            self.move_selection(1)
-            return True
-        elif keyval == Gdk.KEY_Left or keyval == Gdk.KEY_h:
-            self.adjust_selected_volume(-5)
-            return True
-        elif keyval == Gdk.KEY_Right or keyval == Gdk.KEY_l:
-            self.adjust_selected_volume(5)
-            return True
-        elif keyval == Gdk.KEY_m:
-            self.toggle_selected_mute()
-            return True
-        elif keyval >= Gdk.KEY_1 and keyval <= Gdk.KEY_9:
-            # Number keys 1-9 select corresponding items
-            index = keyval - Gdk.KEY_1  # 1 maps to index 0, 2 to 1, etc.
-            self.select_by_index(index)
-            return True
-        return False
-
     def move_selection(self, direction):
-        rows = self.list_box.get_first_child()
-        if not rows:
+        count = self.get_row_count()
+        if count == 0:
             return
-
-        # Count total rows
-        count = 0
-        row = rows
-        while row:
-            count += 1
-            row = row.get_next_sibling()
 
         # Update selected index
         self.selected_row_index = (self.selected_row_index + direction) % count
-
-        # Select the row
-        target_row = self.list_box.get_row_at_index(self.selected_row_index)
-        self.list_box.select_row(target_row)
-        
-        # Trigger UI update for all rows to refresh selected state
-        current = self.list_box.get_first_child()
-        while current:
-            if hasattr(current, 'update_ui'):
-                current.update_ui()
-            current = current.get_next_sibling()
+        self.update_selection_visuals()
 
     def select_by_index(self, index):
-        rows = self.list_box.get_first_child()
-        if not rows:
-            return
-
-        # Count total rows
-        count = 0
-        row = rows
-        while row:
-            count += 1
-            row = row.get_next_sibling()
-
+        count = self.get_row_count()
         # Only select if index is valid
         if index < count:
             self.selected_row_index = index
-            self.list_box.select_row(
-                self.list_box.get_row_at_index(self.selected_row_index))
-            
-            # Trigger UI update for all rows
-            current = self.list_box.get_first_child()
-            while current:
-                if hasattr(current, 'update_ui'):
-                    current.update_ui()
-                current = current.get_next_sibling()
+            self.update_selection_visuals()
+
+    def get_row_count(self):
+        count = 0
+        row = self.list_box.get_first_child()
+        while row:
+            count += 1
+            row = row.get_next_sibling()
+        return count
+
+    def update_selection_visuals(self):
+        index = 0
+        row = self.list_box.get_first_child()
+        while row:
+            if hasattr(row, 'set_selected'):
+                row.set_selected(index == self.selected_row_index)
+            index += 1
+            row = row.get_next_sibling()
 
     def adjust_selected_volume(self, delta):
-        selected_row = self.list_box.get_selected_row()
-        if selected_row and hasattr(selected_row, 'adjust_volume'):
-            selected_row.adjust_volume(delta)
+        row = self.get_selected_row()
+        if row and hasattr(row, 'adjust_volume'):
+            row.adjust_volume(delta)
 
     def toggle_selected_mute(self):
-        selected_row = self.list_box.get_selected_row()
-        if selected_row and hasattr(selected_row, 'toggle_mute'):
-            selected_row.toggle_mute()
+        row = self.get_selected_row()
+        if row and hasattr(row, 'toggle_mute'):
+            row.toggle_mute()
+
+    def get_selected_row(self):
+        index = 0
+        row = self.list_box.get_first_child()
+        while row:
+            if index == self.selected_row_index:
+                return row
+            index += 1
+            row = row.get_next_sibling()
+        return None
 
     def refresh_inputs(self):
         try:
@@ -403,12 +352,16 @@ class VolumeOverlay(Adw.ApplicationWindow):
             # Only rebuild if inputs have changed
             if new_inputs != self.current_inputs:
                 self.current_inputs = new_inputs
-                self.list_box.remove_all()
+                
+                # Remove all children from box
+                child = self.list_box.get_first_child()
+                while child:
+                    self.list_box.remove(child)
+                    child = self.list_box.get_first_child()
 
                 if not input_data:
                     # Show placeholder when no sink inputs
-                    placeholder = Adw.ActionRow()
-                    placeholder.set_title("No sink inputs")
+                    placeholder = Gtk.Label(label="No sink inputs")
                     self.list_box.append(placeholder)
                     self.selected_row_index = 0
                 else:
@@ -418,25 +371,42 @@ class VolumeOverlay(Adw.ApplicationWindow):
                             VolumeSliderRow(idx, app_name, media_name,
                                             volume, is_muted))
 
-                    # Reset selection and select first row if available
+                    # Reset selection and update visuals
                     self.selected_row_index = 0
-                    if self.list_box.get_first_child():
-                        self.list_box.select_row(
-                            self.list_box.get_row_at_index(0))
-                    
-                    # Refresh UI for all rows to ensure selection class is correct
-                    GLib.idle_add(self.update_all_rows)
+                    self.update_selection_visuals()
 
         except Exception:
             pass
         return True
 
     def update_all_rows(self):
-        row = self.list_box.get_first_child()
-        while row:
-            if hasattr(row, 'update_ui'):
-                row.update_ui()
-            row = row.get_next_sibling()
+        self.update_selection_visuals()
+
+    def on_key_pressed(self, controller, keyval, keycode, state):
+        if keyval == Gdk.KEY_Escape or keyval == Gdk.KEY_q:
+            self.close()
+            return True
+        elif keyval == Gdk.KEY_Up or keyval == Gdk.KEY_k:
+            self.move_selection(-1)
+            return True
+        elif keyval == Gdk.KEY_Down or keyval == Gdk.KEY_j:
+            self.move_selection(1)
+            return True
+        elif keyval == Gdk.KEY_Left or keyval == Gdk.KEY_h:
+            self.adjust_selected_volume(-5)
+            return True
+        elif keyval == Gdk.KEY_Right or keyval == Gdk.KEY_l:
+            self.adjust_selected_volume(5)
+            return True
+        elif keyval == Gdk.KEY_m:
+            self.toggle_selected_mute()
+            return True
+        elif keyval >= Gdk.KEY_1 and keyval <= Gdk.KEY_9:
+            # Number keys 1-9 select corresponding items
+            index = keyval - Gdk.KEY_1  # 1 maps to index 0, 2 to 1, etc.
+            self.select_by_index(index)
+            return True
+        return False
 
 
 class Application(Adw.Application):
