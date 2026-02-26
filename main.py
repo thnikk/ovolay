@@ -90,7 +90,7 @@ class VolumeSliderRow(Gtk.Box):
 
         # Use an overlay to put content over a progress bar background
         overlay = Gtk.Overlay()
-        
+
         # Background progress bar for volume level
         self.progress_bar = Gtk.ProgressBar()
         self.progress_bar.set_fraction(initial_volume / 100.0)
@@ -101,7 +101,7 @@ class VolumeSliderRow(Gtk.Box):
         content_box = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         content_box.add_css_class("volume-row-content")
-        
+
         # Create title/subtitle box
         title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         title_box.set_hexpand(True)
@@ -134,7 +134,7 @@ class VolumeSliderRow(Gtk.Box):
             step_increment=1, page_increment=10
         )
         self.adjustment.connect("value-changed", self.on_volume_changed)
-        
+
         # Add scroll controller for volume adjustment
         sc = Gtk.EventControllerScroll.new(
             Gtk.EventControllerScrollFlags.VERTICAL)
@@ -184,7 +184,7 @@ class VolumeSliderRow(Gtk.Box):
     def update_ui(self):
         volume_percent = self.adjustment.get_value()
         self.progress_bar.set_fraction(volume_percent / 100.0)
-        
+
         if self.is_selected_item:
             self.add_css_class("selected")
         else:
@@ -352,7 +352,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
             # Only rebuild if inputs have changed
             if new_inputs != self.current_inputs:
                 self.current_inputs = new_inputs
-                
+
                 # Remove all children from box
                 child = self.list_box.get_first_child()
                 while child:
@@ -366,10 +366,11 @@ class VolumeOverlay(Adw.ApplicationWindow):
                     self.selected_row_index = 0
                 else:
                     for idx in sorted(input_data.keys()):
-                        app_name, media_name, volume, is_muted = input_data[idx]
+                        app_name, media_name, volume, is_muted = \
+                            input_data[idx]
                         self.list_box.append(
-                            VolumeSliderRow(idx, app_name, media_name,
-                                            volume, is_muted))
+                            VolumeSliderRow(
+                                idx, app_name, media_name, volume, is_muted))
 
                     # Reset selection and update visuals
                     self.selected_row_index = 0
