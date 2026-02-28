@@ -292,7 +292,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
             return
 
         # Update selected index
-        self.selected_row_index = (self.selected_row_index + direction) % count
+        # self.selected_row_index = (self.selected_row_index + direction) % count
+        self.selected_row_index = max(min(
+            (self.selected_row_index + direction),
+            count-1), 0)
         self.update_selection_visuals()
 
     def select_by_index(self, index):
@@ -413,16 +416,24 @@ class VolumeOverlay(Adw.ApplicationWindow):
         if keyval == Gdk.KEY_Escape or keyval == Gdk.KEY_q:
             self.close()
             return True
-        elif keyval == Gdk.KEY_Up or keyval == Gdk.KEY_k:
+        elif keyval == Gdk.KEY_Up \
+                or keyval == Gdk.KEY_k \
+                or keyval == Gdk.KEY_w:
             self.move_selection(-1)
             return True
-        elif keyval == Gdk.KEY_Down or keyval == Gdk.KEY_j:
+        elif keyval == Gdk.KEY_Down \
+                or keyval == Gdk.KEY_j \
+                or keyval == Gdk.KEY_s:
             self.move_selection(1)
             return True
-        elif keyval == Gdk.KEY_Left or keyval == Gdk.KEY_h:
+        elif keyval == Gdk.KEY_Left \
+                or keyval == Gdk.KEY_h \
+                or keyval == Gdk.KEY_a:
             self.adjust_selected_volume(-5)
             return True
-        elif keyval == Gdk.KEY_Right or keyval == Gdk.KEY_l:
+        elif keyval == Gdk.KEY_Right \
+                or keyval == Gdk.KEY_l \
+                or keyval == Gdk.KEY_d:
             self.adjust_selected_volume(5)
             return True
         elif keyval == Gdk.KEY_m or keyval == Gdk.KEY_space:
