@@ -1,6 +1,7 @@
 #!/usr/bin/python3 -u
 from ctypes import CDLL
 import subprocess
+import argparse
 
 # Pre-load the layer shell library
 try:
@@ -21,9 +22,9 @@ CSS = """
     font-family: Nunito;
     background-color: alpha(#1c1f26, 0.9);
     color: #d8dee9;
-    border-radius: 25px;
+    border-radius: 30px;
     border: 1px solid @borders;
-    padding: 15px;
+    padding: 20px;
 }
 
 .volume-row {
@@ -74,7 +75,23 @@ CSS = """
     font-size: 12px;
     opacity: 0.6;
 }
+
+.window-label {
+    font-size: 24px;
+}
+
+.close-button {
+    padding: 5px;
+    border-radius: 24px;
+}
 """
+
+
+def parse_args() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '-t', '--title', action='store_true', help='show title bar')
+    return parser.parse_args()
 
 
 class VolumeSliderRow(Gtk.Box):
@@ -99,7 +116,7 @@ class VolumeSliderRow(Gtk.Box):
 
         # Content box
         content_box = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
         content_box.add_css_class("volume-row-content")
 
         # Create title/subtitle box
@@ -215,7 +232,7 @@ class VolumeSliderRow(Gtk.Box):
 
 
 class VolumeOverlay(Adw.ApplicationWindow):
-    def __init__(self, **kwargs):
+    def __init__(self, args, **kwargs):
         super().__init__(**kwargs)
         self.current_inputs = None  # Track current sink input indices
         self.selected_row_index = 0  # Track selected row for keyboard nav
@@ -243,10 +260,19 @@ class VolumeOverlay(Adw.ApplicationWindow):
 
         # Main Layout
         self.main_box = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            orientation=Gtk.Orientation.VERTICAL, spacing=20)
+
+        if args.title:
+            header_box = Gtk.CenterBox.new()
+            window_label = Gtk.Label(
+                label="App Volume", css_classes=["window-label"])
+            header_box.set_center_widget(window_label)
+            close_button = Gtk.Button(label="X", css_classes=["close-button"])
+            header_box.set_end_widget(close_button)
+            self.main_box.append(header_box)
 
         self.list_box = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.list_box.add_css_class("boxed-list")
 
         self.main_box.append(self.list_box)
@@ -424,8 +450,10 @@ class Application(Adw.Application):
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
+        args = parse_args()
+
         # Create and show the overlay
-        self.win = VolumeOverlay(application=self)
+        self.win = VolumeOverlay(args, application=self)
         self.win.present()
 
 
