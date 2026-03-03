@@ -309,8 +309,12 @@ class VolumeOverlay(Adw.ApplicationWindow):
             window_label = Gtk.Label(
                 label="App Volume", css_classes=["window-label"])
             header_box.set_center_widget(window_label)
+            close_icon = Gtk.Image.new_from_icon_name(
+                "window-close-symbolic")
             close_button = Gtk.Button(
-                label="X", css_classes=["close-button"])
+                css_classes=["close-button", "circular"])
+            close_button.set_child(close_icon)
+            close_button.connect("clicked", lambda b: self.close())
             header_box.set_end_widget(close_button)
             self.main_box.append(header_box)
 
