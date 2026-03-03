@@ -1,7 +1,8 @@
 #!/usr/bin/python3 -u
 from ctypes import CDLL
-import subprocess
+import threading
 import argparse
+import pulsectl
 
 # Pre-load the layer shell library
 try:
@@ -101,32 +102,43 @@ def parse_args() -> argparse.Namespace:
 
 
 class VolumeSliderRow(Gtk.Box):
-    def __init__(self, index, app_name, media_name, initial_volume,
-                 is_muted):
+    def __init__(self, sink_input, set_volume_cb, set_mute_cb):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
-        self.index = index
-        self.is_muted = is_muted
-        self.volume = initial_volume
+        self.index = sink_input.index
+        self.set_volume_cb = set_volume_cb
+        self.set_mute_cb = set_mute_cb
+        self.is_muted = bool(sink_input.mute)
         self.is_selected_item = False
+
+        # Compute average channel volume as integer percentage
+        vol_vals = sink_input.volume.values
+        initial_volume = int(sum(vol_vals) / len(vol_vals) * 100)
+
+        # Extract app and media names from proplist
+        app_name = sink_input.proplist.get(
+            'application.name', 'Unknown Application')
+        media_name = sink_input.proplist.get('media.name')
+
         self.add_css_class("volume-row")
         self.set_hexpand(True)
 
-        # Use an overlay to put content over a progress bar background
+        # Overlay puts content over the progress bar background
         overlay = Gtk.Overlay()
 
-        # Background progress bar for volume level
+        # Background progress bar showing volume level
         self.progress_bar = Gtk.ProgressBar()
         self.progress_bar.set_fraction(initial_volume / 100.0)
         self.progress_bar.add_css_class("volume-progress")
         overlay.set_child(self.progress_bar)
 
-        # Content box
+        # Horizontal content box
         content_box = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
         content_box.add_css_class("volume-row-content")
 
-        # Create title/subtitle box
-        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        # Vertical box for title and optional subtitle
+        title_box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=0)
         title_box.set_hexpand(True)
         title_box.set_valign(Gtk.Align.CENTER)
 
@@ -148,7 +160,6 @@ class VolumeSliderRow(Gtk.Box):
             title_box.append(subtitle_label)
 
         content_box.append(title_box)
-
         overlay.add_overlay(content_box)
         self.append(overlay)
 
@@ -158,20 +169,20 @@ class VolumeSliderRow(Gtk.Box):
         )
         self.adjustment.connect("value-changed", self.on_volume_changed)
 
-        # Add scroll controller for volume adjustment
+        # Scroll controller for volume adjustment
         sc = Gtk.EventControllerScroll.new(
             Gtk.EventControllerScrollFlags.VERTICAL)
         sc.connect("scroll", self.on_scroll)
         self.add_controller(sc)
 
-        # Left click drag to set/drag volume
+        # Left-click drag to set volume
         self.drag_gesture = Gtk.GestureDrag.new()
         self.drag_gesture.set_button(1)
         self.drag_gesture.connect("drag-begin", self.on_drag_begin)
         self.drag_gesture.connect("drag-update", self.on_drag_update)
         self.add_controller(self.drag_gesture)
 
-        # Right click to mute
+        # Right-click to toggle mute
         self.right_click_gesture = Gtk.GestureClick.new()
         self.right_click_gesture.set_button(3)
         self.right_click_gesture.connect("pressed", self.on_right_click)
@@ -219,21 +230,17 @@ class VolumeSliderRow(Gtk.Box):
             self.progress_bar.remove_css_class("muted")
 
     def on_volume_changed(self, adjustment):
-        volume = int(adjustment.get_value())
-        subprocess.run(["pactl", "set-sink-input-volume",
-                       str(self.index), f"{volume}%"])
+        # Forward new volume (0.0-1.0) to PulseAudio via callback
+        self.set_volume_cb(self.index, adjustment.get_value() / 100.0)
         self.update_ui()
 
     def adjust_volume(self, delta):
         current = self.adjustment.get_value()
-        new = max(0, min(100, current + delta))
-        self.adjustment.set_value(new)
+        self.adjustment.set_value(max(0, min(100, current + delta)))
 
     def toggle_mute(self):
         self.is_muted = not self.is_muted
-        mute_state = "1" if self.is_muted else "0"
-        subprocess.run(["pactl", "set-sink-input-mute",
-                       str(self.index), mute_state])
+        self.set_mute_cb(self.index, self.is_muted)
         self.update_ui()
 
 
@@ -241,8 +248,12 @@ class VolumeOverlay(Adw.ApplicationWindow):
     def __init__(self, args, **kwargs):
         super().__init__(**kwargs)
         self.args = args
-        self.current_inputs = None  # Track current sink input indices
-        self.selected_row_index = 0  # Track selected row for keyboard nav
+        self.current_inputs = None
+        self.selected_row_index = 0
+        self._refresh_pending = False
+
+        # PulseAudio connection for control operations (main thread only)
+        self.pulse = pulsectl.Pulse('ovolay-control')
 
         # Navigation key sets
         self.up_keys = []
@@ -266,28 +277,30 @@ class VolumeOverlay(Adw.ApplicationWindow):
             self.left_keys.append(Gdk.KEY_a)
             self.right_keys.append(Gdk.KEY_d)
 
-        # Layer Shell Configuration
+        # Layer Shell configuration
         Gtk4LayerShell.init_for_window(self)
         Gtk4LayerShell.set_keyboard_mode(
             self, Gtk4LayerShell.KeyboardMode.ON_DEMAND)
         Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.OVERLAY)
         Gtk4LayerShell.set_namespace(self, "volume-overlay")
 
-        # Close window when it loses focus
+        # Close window on focus loss
         focus_controller = Gtk.EventControllerFocus()
-        focus_controller.connect("leave", lambda controller: self.close())
+        focus_controller.connect("leave", lambda c: self.close())
         self.add_controller(focus_controller)
 
-        # Center the window
-        for edge in [Gtk4LayerShell.Edge.LEFT, Gtk4LayerShell.Edge.RIGHT,
-                     Gtk4LayerShell.Edge.TOP, Gtk4LayerShell.Edge.BOTTOM]:
+        # Center the window (no edge anchoring)
+        for edge in [
+            Gtk4LayerShell.Edge.LEFT, Gtk4LayerShell.Edge.RIGHT,
+            Gtk4LayerShell.Edge.TOP, Gtk4LayerShell.Edge.BOTTOM
+        ]:
             Gtk4LayerShell.set_anchor(self, edge, False)
 
         self.set_default_size(500, 1)
         self.set_size_request(500, -1)
         self.add_css_class("overlay-window")
 
-        # Main Layout
+        # Main layout
         self.main_box = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL, spacing=20)
 
@@ -296,7 +309,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
             window_label = Gtk.Label(
                 label="App Volume", css_classes=["window-label"])
             header_box.set_center_widget(window_label)
-            close_button = Gtk.Button(label="X", css_classes=["close-button"])
+            close_button = Gtk.Button(
+                label="X", css_classes=["close-button"])
             header_box.set_end_widget(close_button)
             self.main_box.append(header_box)
 
@@ -307,33 +321,81 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.main_box.append(self.list_box)
         self.set_content(self.main_box)
 
-        # Key Controller
+        # Key controller for keyboard navigation
         evk = Gtk.EventControllerKey()
         evk.connect("key-pressed", self.on_key_pressed)
         self.add_controller(evk)
 
+        # Close pulse connection when the window is destroyed
+        self.connect("destroy", lambda w: self.pulse.close())
+
         self.refresh_inputs()
-        GLib.timeout_add_seconds(2, self.refresh_inputs)
+        self._start_event_listener()
+
+    def _set_volume(self, index, volume_float):
+        # Look up the sink input by index and set its volume
+        try:
+            for si in self.pulse.sink_input_list():
+                if si.index == index:
+                    self.pulse.volume_set_all_chans(si, volume_float)
+                    break
+        except pulsectl.PulseError:
+            pass
+
+    def _set_mute(self, index, muted):
+        # Look up the sink input by index and set its mute state
+        try:
+            for si in self.pulse.sink_input_list():
+                if si.index == index:
+                    self.pulse.mute(si, muted)
+                    break
+        except pulsectl.PulseError:
+            pass
+
+    def _start_event_listener(self):
+        # Watch for sink-input events in a daemon thread
+        def listen():
+            try:
+                with pulsectl.Pulse('ovolay-events') as pulse:
+                    pulse.event_mask_set('sink_input')
+                    pulse.event_callback_set(self._on_pulse_event)
+                    while True:
+                        try:
+                            pulse.event_listen(timeout=1)
+                        except pulsectl.PulseLoopStop:
+                            pass
+            except Exception:
+                pass
+        threading.Thread(target=listen, daemon=True).start()
+
+    def _on_pulse_event(self, ev):
+        # Schedule a deduplicated UI refresh on the GTK main thread
+        if not self._refresh_pending:
+            self._refresh_pending = True
+            GLib.idle_add(self._do_refresh)
+        raise pulsectl.PulseLoopStop
+
+    def _do_refresh(self):
+        # Called on the main thread; clears the pending flag then refreshes
+        self._refresh_pending = False
+        self.refresh_inputs()
+        return GLib.SOURCE_REMOVE
 
     def move_selection(self, direction):
         count = self.get_row_count()
         if count == 0:
             return
 
-        # Update selected index
         if self.args.wrap:
             self.selected_row_index = (
                 self.selected_row_index + direction) % count
         else:
-            self.selected_row_index = max(min(
-                (self.selected_row_index + direction),
-                count-1), 0)
+            self.selected_row_index = max(
+                0, min(self.selected_row_index + direction, count - 1))
         self.update_selection_visuals()
 
     def select_by_index(self, index):
-        count = self.get_row_count()
-        # Only select if index is valid
-        if index < count:
+        if index < self.get_row_count():
             self.selected_row_index = index
             self.update_selection_visuals()
 
@@ -376,76 +438,35 @@ class VolumeOverlay(Adw.ApplicationWindow):
 
     def refresh_inputs(self):
         try:
-            output = subprocess.check_output(
-                ["pactl", "list", "sink-inputs"], text=True
-            )
-            blocks = output.strip().split("\n\n")
+            inputs = self.pulse.sink_input_list()
+            new_indices = frozenset(si.index for si in inputs)
 
-            # Extract current sink input indices
-            new_inputs = set()
-            input_data = {}
+            if new_indices != self.current_inputs:
+                self.current_inputs = new_indices
 
-            for block in blocks:
-                if "Sink Input #" in block:
-                    lines = block.splitlines()
-                    idx = lines[0].split("#")[-1].strip()
-                    new_inputs.add(idx)
-
-                    app_name = "Unknown Application"
-                    media_name = None
-                    volume = 0
-                    is_muted = False
-
-                    for line in lines:
-                        if "application.name =" in line:
-                            app_name = line.split("=")[-1].strip().strip('"')
-                        elif "media.name =" in line:
-                            media_name = line.split("=")[-1].strip().strip('"')
-                        elif "Volume:" in line and "%" in line:
-                            parts = line.split("/")
-                            if len(parts) > 1:
-                                volume = int(parts[1].strip().replace("%", ""))
-                        elif "Mute:" in line:
-                            is_muted = "yes" in line.lower()
-
-                    input_data[idx] = (app_name, media_name, volume, is_muted)
-
-            # Only rebuild if inputs have changed
-            if new_inputs != self.current_inputs:
-                self.current_inputs = new_inputs
-
-                # Remove all children from box
+                # Clear existing rows
                 child = self.list_box.get_first_child()
                 while child:
                     self.list_box.remove(child)
                     child = self.list_box.get_first_child()
 
-                if not input_data:
-                    # Show placeholder when no sink inputs
-                    placeholder = Gtk.Label(label="No sink inputs")
-                    self.list_box.append(placeholder)
+                if not inputs:
+                    self.list_box.append(
+                        Gtk.Label(label="No sink inputs"))
                     self.selected_row_index = 0
                 else:
-                    for idx in sorted(input_data.keys()):
-                        app_name, media_name, volume, is_muted = \
-                            input_data[idx]
-                        self.list_box.append(
-                            VolumeSliderRow(
-                                idx, app_name, media_name, volume, is_muted))
-
-                    # Reset selection and update visuals
+                    for si in sorted(inputs, key=lambda x: x.index):
+                        self.list_box.append(VolumeSliderRow(
+                            si, self._set_volume, self._set_mute))
                     self.selected_row_index = 0
                     self.update_selection_visuals()
 
-        except Exception:
+        except pulsectl.PulseError:
             pass
         return True
 
-    def update_all_rows(self):
-        self.update_selection_visuals()
-
     def on_key_pressed(self, controller, keyval, keycode, state):
-        if keyval == Gdk.KEY_Escape or keyval == Gdk.KEY_q:
+        if keyval in (Gdk.KEY_Escape, Gdk.KEY_q):
             self.close()
             return True
 
@@ -461,13 +482,12 @@ class VolumeOverlay(Adw.ApplicationWindow):
         elif keyval in self.right_keys:
             self.adjust_selected_volume(5)
             return True
-        elif keyval == Gdk.KEY_m or keyval == Gdk.KEY_space:
+        elif keyval in (Gdk.KEY_m, Gdk.KEY_space):
             self.toggle_selected_mute()
             return True
-        elif keyval >= Gdk.KEY_1 and keyval <= Gdk.KEY_9:
-            # Number keys 1-9 select corresponding items
-            index = keyval - Gdk.KEY_1  # 1 maps to index 0, 2 to 1, etc.
-            self.select_by_index(index)
+        elif Gdk.KEY_1 <= keyval <= Gdk.KEY_9:
+            # Number keys 1-9 select items by position
+            self.select_by_index(keyval - Gdk.KEY_1)
             return True
         return False
 
@@ -488,7 +508,6 @@ class Application(Adw.Application):
 
         args = parse_args()
 
-        # Create and show the overlay
         self.win = VolumeOverlay(args, application=self)
         self.win.present()
 
