@@ -35,7 +35,7 @@ exe = EXE(
     a.scripts,
     [],  # Leave this empty to prevent one-file bundling 
     exclude_binaries=True, # Essential for one-dir mode
-    name='volume-overlay',
+    name='ovolay',
     debug=False,
     bootloader_ignore_signals=False,
     strip=True,  # Strip symbols to make binaries smaller and faster to load
@@ -55,5 +55,5 @@ coll = COLLECT(
     a.datas,
     strip=True,
     upx=False,
-    name='volume-overlay',
+    name='ovolay',
 )

@@ -87,10 +87,16 @@ CSS = """
 """
 
 
-def parse_args() -> argparse.ArgumentParser:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '-t', '--title', action='store_true', help='show title bar')
+    parser.add_argument(
+        '-w', '--wrap', action='store_true', help='wrap selection at ends')
+    parser.add_argument(
+        '-b', '--binds', nargs='+', choices=['udlr', 'hjkl', 'wasd'],
+        default=['udlr', 'hjkl', 'wasd'],
+        help='keybindings to enable (default: all)')
     return parser.parse_args()
 
 
@@ -234,8 +240,31 @@ class VolumeSliderRow(Gtk.Box):
 class VolumeOverlay(Adw.ApplicationWindow):
     def __init__(self, args, **kwargs):
         super().__init__(**kwargs)
+        self.args = args
         self.current_inputs = None  # Track current sink input indices
         self.selected_row_index = 0  # Track selected row for keyboard nav
+
+        # Navigation key sets
+        self.up_keys = []
+        self.down_keys = []
+        self.left_keys = []
+        self.right_keys = []
+
+        if 'udlr' in self.args.binds:
+            self.up_keys.append(Gdk.KEY_Up)
+            self.down_keys.append(Gdk.KEY_Down)
+            self.left_keys.append(Gdk.KEY_Left)
+            self.right_keys.append(Gdk.KEY_Right)
+        if 'hjkl' in self.args.binds:
+            self.up_keys.append(Gdk.KEY_k)
+            self.down_keys.append(Gdk.KEY_j)
+            self.left_keys.append(Gdk.KEY_h)
+            self.right_keys.append(Gdk.KEY_l)
+        if 'wasd' in self.args.binds:
+            self.up_keys.append(Gdk.KEY_w)
+            self.down_keys.append(Gdk.KEY_s)
+            self.left_keys.append(Gdk.KEY_a)
+            self.right_keys.append(Gdk.KEY_d)
 
         # Layer Shell Configuration
         Gtk4LayerShell.init_for_window(self)
@@ -292,10 +321,13 @@ class VolumeOverlay(Adw.ApplicationWindow):
             return
 
         # Update selected index
-        # self.selected_row_index = (self.selected_row_index + direction) % count
-        self.selected_row_index = max(min(
-            (self.selected_row_index + direction),
-            count-1), 0)
+        if self.args.wrap:
+            self.selected_row_index = (
+                self.selected_row_index + direction) % count
+        else:
+            self.selected_row_index = max(min(
+                (self.selected_row_index + direction),
+                count-1), 0)
         self.update_selection_visuals()
 
     def select_by_index(self, index):
@@ -416,24 +448,17 @@ class VolumeOverlay(Adw.ApplicationWindow):
         if keyval == Gdk.KEY_Escape or keyval == Gdk.KEY_q:
             self.close()
             return True
-        elif keyval == Gdk.KEY_Up \
-                or keyval == Gdk.KEY_k \
-                or keyval == Gdk.KEY_w:
+
+        if keyval in self.up_keys:
             self.move_selection(-1)
             return True
-        elif keyval == Gdk.KEY_Down \
-                or keyval == Gdk.KEY_j \
-                or keyval == Gdk.KEY_s:
+        elif keyval in self.down_keys:
             self.move_selection(1)
             return True
-        elif keyval == Gdk.KEY_Left \
-                or keyval == Gdk.KEY_h \
-                or keyval == Gdk.KEY_a:
+        elif keyval in self.left_keys:
             self.adjust_selected_volume(-5)
             return True
-        elif keyval == Gdk.KEY_Right \
-                or keyval == Gdk.KEY_l \
-                or keyval == Gdk.KEY_d:
+        elif keyval in self.right_keys:
             self.adjust_selected_volume(5)
             return True
         elif keyval == Gdk.KEY_m or keyval == Gdk.KEY_space:
