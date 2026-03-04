@@ -48,7 +48,7 @@ CSS = """
 }
 
 .volume-progress progress {
-    background-color: alpha(#3584e4, 0.2);
+    background-color: color-mix(in srgb, @accent_bg_color 20%, transparent);
     border-radius: 10px 0 0 10px;
     border: none;
     min-height: 50px;
@@ -77,13 +77,16 @@ CSS = """
     opacity: 0.6;
 }
 
-.window-label {
-    font-size: 24px;
+.close-button {
+/*    padding: 5px; */
+    border-radius: 24px;
+    background: transparent;
+    box-shadow: none;
+    border: none;
 }
 
-.close-button {
-    padding: 5px;
-    border-radius: 24px;
+.close-button:hover {
+    background: alpha(currentColor, 0.1);
 }
 
 viewswitcher {
@@ -103,8 +106,6 @@ viewswitcher {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '-t', '--title', action='store_true', help='show title bar')
     parser.add_argument(
         '-w', '--wrap', action='store_true', help='wrap selection at ends')
     parser.add_argument(
@@ -334,20 +335,6 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.main_box = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL, spacing=20)
 
-        if args.title:
-            header_box = Gtk.CenterBox.new()
-            window_label = Gtk.Label(
-                label="App Volume", css_classes=["window-label"])
-            header_box.set_center_widget(window_label)
-            close_icon = Gtk.Image.new_from_icon_name(
-                "window-close-symbolic")
-            close_button = Gtk.Button(
-                css_classes=["close-button", "circular"])
-            close_button.set_child(close_icon)
-            close_button.connect("clicked", lambda b: self.close())
-            header_box.set_end_widget(close_button)
-            self.main_box.append(header_box)
-
         # Tab bar: ViewSwitcher selects pages in ViewStack
         self.view_stack = Adw.ViewStack()
         self.view_stack.add_css_class("tab-content")
@@ -355,6 +342,17 @@ class VolumeOverlay(Adw.ApplicationWindow):
         switcher.set_stack(self.view_stack)
         switcher.set_policy(Adw.ViewSwitcherPolicy.WIDE)
         switcher.set_hexpand(True)
+
+        # Close button sits to the right of the tab switcher
+        close_icon = Gtk.Image.new_from_icon_name("window-close-symbolic")
+        close_button = Gtk.Button(css_classes=["close-button", "circular"])
+        close_button.set_child(close_icon)
+        close_button.connect("clicked", lambda b: self.close())
+        close_button.set_margin_start(10)
+
+        tab_row = Gtk.CenterBox()
+        tab_row.set_center_widget(switcher)
+        tab_row.set_end_widget(close_button)
 
         # Build a list box for each tab and register it in the stack
         self.list_boxes = {}
@@ -374,7 +372,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.view_stack.connect(
             "notify::visible-child-name", self.on_tab_changed)
 
-        self.main_box.append(switcher)
+        self.main_box.append(tab_row)
         self.main_box.append(self.view_stack)
         self.set_content(self.main_box)
 
