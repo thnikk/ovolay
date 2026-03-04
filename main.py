@@ -93,6 +93,11 @@ viewswitcher {
 .tab-content {
     background-color: transparent;
 }
+
+.default-icon {
+    opacity: 0.6;
+    padding-right: 10px;
+}
 """
 
 
@@ -117,11 +122,13 @@ def _vol_pct(obj):
 
 class VolumeSliderRow(Gtk.Box):
     def __init__(self, title, subtitle, index, initial_volume,
-                 is_muted, set_volume_cb, set_mute_cb):
+                 is_muted, set_volume_cb, set_mute_cb,
+                 is_default=False, set_default_cb=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.index = index
         self.set_volume_cb = set_volume_cb
         self.set_mute_cb = set_mute_cb
+        self.set_default_cb = set_default_cb
         self.is_muted = bool(is_muted)
         self.is_selected_item = False
 
@@ -166,6 +173,15 @@ class VolumeSliderRow(Gtk.Box):
             title_box.append(subtitle_label)
 
         content_box.append(title_box)
+
+        # Default device indicator; hidden when not the default
+        self.default_icon = Gtk.Image.new_from_icon_name(
+            "object-select-symbolic")
+        self.default_icon.set_valign(Gtk.Align.CENTER)
+        self.default_icon.add_css_class("default-icon")
+        self.default_icon.set_visible(is_default)
+        content_box.append(self.default_icon)
+
         overlay.add_overlay(content_box)
         self.append(overlay)
 
@@ -249,6 +265,10 @@ class VolumeSliderRow(Gtk.Box):
         self.set_mute_cb(self.index, self.is_muted)
         self.update_ui()
 
+    def set_is_default(self, value):
+        """Show or hide the default device indicator."""
+        self.default_icon.set_visible(bool(value))
+
 
 class VolumeOverlay(Adw.ApplicationWindow):
     def __init__(self, args, **kwargs):
@@ -258,6 +278,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
         # Per-tab selection index and known-device-index cache
         self.selected_indices = {'apps': 0, 'outputs': 0, 'inputs': 0}
         self._known = {'apps': None, 'outputs': None, 'inputs': None}
+        # Cache of the current default device name per tab
+        self._known_defaults = {'outputs': None, 'inputs': None}
         self._refresh_pending = False
 
         # PulseAudio connection for control operations (main thread only)
@@ -416,6 +438,16 @@ class VolumeOverlay(Adw.ApplicationWindow):
             self.pulse.source_list, index,
             lambda obj: self.pulse.mute(obj, muted))
 
+    def _set_output_default(self, index):
+        self._lookup_and_call(
+            self.pulse.sink_list, index,
+            lambda obj: self.pulse.sink_default_set(obj))
+
+    def _set_input_default(self, index):
+        self._lookup_and_call(
+            self.pulse.source_list, index,
+            lambda obj: self.pulse.source_default_set(obj))
+
     # ------------------------------------------------------------------
     # Event listener
     # ------------------------------------------------------------------
@@ -426,7 +458,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
             try:
                 with pulsectl.Pulse('ovolay-events') as pulse:
                     pulse.event_mask_set(
-                        'sink_input', 'sink', 'source')
+                        'sink_input', 'sink', 'source', 'server')
                     pulse.event_callback_set(self._on_pulse_event)
                     while True:
                         try:
@@ -493,13 +525,16 @@ class VolumeOverlay(Adw.ApplicationWindow):
             pass
 
     def refresh_outputs(self):
-        """Rebuild the Outputs list if the set of sinks changed."""
+        """Rebuild the Outputs list if the set of sinks or default changed."""
         try:
             items = self.pulse.sink_list()
+            default_name = self.pulse.server_info().default_sink_name
             indices = frozenset(s.index for s in items)
-            if indices == self._known['outputs']:
+            if (indices == self._known['outputs']
+                    and default_name == self._known_defaults['outputs']):
                 return
             self._known['outputs'] = indices
+            self._known_defaults['outputs'] = default_name
             lb = self.list_boxes['outputs']
             self._clear_list(lb)
             if not items:
@@ -510,7 +545,9 @@ class VolumeOverlay(Adw.ApplicationWindow):
                 row = VolumeSliderRow(
                     sink.description, sink.name, sink.index,
                     _vol_pct(sink), bool(sink.mute),
-                    self._set_output_volume, self._set_output_mute)
+                    self._set_output_volume, self._set_output_mute,
+                    is_default=(sink.name == default_name),
+                    set_default_cb=self._set_output_default)
                 lb.append(row)
             self.selected_indices['outputs'] = 0
             if self.current_tab == 'outputs':
@@ -519,17 +556,20 @@ class VolumeOverlay(Adw.ApplicationWindow):
             pass
 
     def refresh_inputs_tab(self):
-        """Rebuild the Inputs list if the set of sources changed."""
+        """Rebuild the Inputs list if the set of sources or default changed."""
         try:
             # Exclude monitor sources (loopbacks mirroring outputs)
             items = [
                 s for s in self.pulse.source_list()
                 if not s.name.endswith('.monitor')
             ]
+            default_name = self.pulse.server_info().default_source_name
             indices = frozenset(s.index for s in items)
-            if indices == self._known['inputs']:
+            if (indices == self._known['inputs']
+                    and default_name == self._known_defaults['inputs']):
                 return
             self._known['inputs'] = indices
+            self._known_defaults['inputs'] = default_name
             lb = self.list_boxes['inputs']
             self._clear_list(lb)
             if not items:
@@ -540,7 +580,9 @@ class VolumeOverlay(Adw.ApplicationWindow):
                 row = VolumeSliderRow(
                     source.description, source.name, source.index,
                     _vol_pct(source), bool(source.mute),
-                    self._set_input_volume, self._set_input_mute)
+                    self._set_input_volume, self._set_input_mute,
+                    is_default=(source.name == default_name),
+                    set_default_cb=self._set_input_default)
                 lb.append(row)
             self.selected_indices['inputs'] = 0
             if self.current_tab == 'inputs':
@@ -622,6 +664,24 @@ class VolumeOverlay(Adw.ApplicationWindow):
         if row and hasattr(row, 'toggle_mute'):
             row.toggle_mute()
 
+    def set_selected_as_default(self):
+        """Set the selected row as the default device (outputs/inputs only)."""
+        if self.current_tab not in ('outputs', 'inputs'):
+            return
+        row = self.get_selected_row()
+        if not (row and getattr(row, 'set_default_cb', None)):
+            return
+        row.set_default_cb(row.index)
+        # Update indicator immediately without waiting for a PA event
+        lb = self.list_boxes[self.current_tab]
+        child = lb.get_first_child()
+        while child:
+            if hasattr(child, 'set_is_default'):
+                child.set_is_default(child is row)
+            child = child.get_next_sibling()
+        # Invalidate the default cache so the next refresh picks up the change
+        self._known_defaults[self.current_tab] = None
+
     # Tab order used for cycling and direct selection
     TAB_ORDER = ['apps', 'outputs', 'inputs']
 
@@ -669,6 +729,9 @@ class VolumeOverlay(Adw.ApplicationWindow):
             return True
         elif keyval in (Gdk.KEY_m, Gdk.KEY_space):
             self.toggle_selected_mute()
+            return True
+        elif keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            self.set_selected_as_default()
             return True
         return False
 
