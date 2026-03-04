@@ -752,7 +752,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
 
 class Application(Adw.Application):
     def __init__(self):
-        super().__init__(application_id="com.thnikk.VolumeOverlay")
+        super().__init__(application_id="com.thnikk.ovolay")
 
     def do_activate(self):
         # Load CSS
