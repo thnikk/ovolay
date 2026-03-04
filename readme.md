@@ -1,8 +1,7 @@
-<center>
-<h1> Ovolay </h1>
+# Ovolay
+<p>
 A gtk4-layer-shell volume overlay.
-</center>
-</br>
+</p>
 
 <p align="center">
   <img src="assets/screenshot.png"/>
