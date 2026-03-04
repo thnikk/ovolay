@@ -105,6 +105,11 @@ viewswitcher {
     opacity: 0.6;
     padding-right: 10px;
 }
+
+.windowed {
+    border-radius: 0;
+    border: none;
+}
 """
 
 
@@ -122,6 +127,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--screenshot', metavar='PATH',
         help=argparse.SUPPRESS)
+    parser.add_argument(
+        '--window', action='store_true',
+        help='run as a regular window without layer shell')
     return parser.parse_args()
 
 
@@ -353,28 +361,31 @@ class VolumeOverlay(Adw.ApplicationWindow):
             self.left_keys.append(Gdk.KEY_a)
             self.right_keys.append(Gdk.KEY_d)
 
-        # Layer Shell configuration
-        Gtk4LayerShell.init_for_window(self)
-        Gtk4LayerShell.set_keyboard_mode(
-            self, Gtk4LayerShell.KeyboardMode.ON_DEMAND)
-        Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.OVERLAY)
-        Gtk4LayerShell.set_namespace(self, "volume-overlay")
+        if not self.args.window:
+            # Layer Shell configuration
+            Gtk4LayerShell.init_for_window(self)
+            Gtk4LayerShell.set_keyboard_mode(
+                self, Gtk4LayerShell.KeyboardMode.ON_DEMAND)
+            Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.OVERLAY)
+            Gtk4LayerShell.set_namespace(self, "volume-overlay")
 
-        # Close window on focus loss
-        focus_controller = Gtk.EventControllerFocus()
-        focus_controller.connect("leave", lambda c: self.close())
-        self.add_controller(focus_controller)
+            # Center the window (no edge anchoring)
+            for edge in [
+                Gtk4LayerShell.Edge.LEFT, Gtk4LayerShell.Edge.RIGHT,
+                Gtk4LayerShell.Edge.TOP, Gtk4LayerShell.Edge.BOTTOM
+            ]:
+                Gtk4LayerShell.set_anchor(self, edge, False)
 
-        # Center the window (no edge anchoring)
-        for edge in [
-            Gtk4LayerShell.Edge.LEFT, Gtk4LayerShell.Edge.RIGHT,
-            Gtk4LayerShell.Edge.TOP, Gtk4LayerShell.Edge.BOTTOM
-        ]:
-            Gtk4LayerShell.set_anchor(self, edge, False)
+            # Close on focus loss only in layer shell mode
+            focus_controller = Gtk.EventControllerFocus()
+            focus_controller.connect("leave", lambda c: self.close())
+            self.add_controller(focus_controller)
 
         self.set_default_size(500, 1)
         self.set_size_request(500, -1)
         self.add_css_class("overlay-window")
+        if self.args.window:
+            self.add_css_class("windowed")
 
         # Main layout
         self.main_box = Gtk.Box(
