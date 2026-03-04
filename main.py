@@ -386,10 +386,14 @@ class VolumeOverlay(Adw.ApplicationWindow):
         # Close pulse connection when the window is destroyed
         self.connect("destroy", lambda w: self.pulse.close())
 
-        # Initial data load for all tabs
+        # Initial data load; fetch server_info once and share it
+        try:
+            server_info = self.pulse.server_info()
+        except pulsectl.PulseError:
+            server_info = None
         self.refresh_apps()
-        self.refresh_outputs()
-        self.refresh_inputs_tab()
+        self.refresh_outputs(server_info)
+        self.refresh_inputs_tab(server_info)
         self._start_event_listener()
 
     # ------------------------------------------------------------------
@@ -477,9 +481,14 @@ class VolumeOverlay(Adw.ApplicationWindow):
     def _do_refresh(self):
         # Called on the main thread; clears the pending flag then refreshes
         self._refresh_pending = False
+        # Fetch server_info once and share across both refresh calls
+        try:
+            server_info = self.pulse.server_info()
+        except pulsectl.PulseError:
+            server_info = None
         self.refresh_apps()
-        self.refresh_outputs()
-        self.refresh_inputs_tab()
+        self.refresh_outputs(server_info)
+        self.refresh_inputs_tab(server_info)
         return GLib.SOURCE_REMOVE
 
     # ------------------------------------------------------------------
@@ -534,11 +543,13 @@ class VolumeOverlay(Adw.ApplicationWindow):
         except pulsectl.PulseError:
             pass
 
-    def refresh_outputs(self):
+    def refresh_outputs(self, server_info=None):
         """Rebuild the Outputs list if the set of sinks or default changed."""
         try:
             items = self.pulse.sink_list()
-            default_name = self.pulse.server_info().default_sink_name
+            if server_info is None:
+                server_info = self.pulse.server_info()
+            default_name = server_info.default_sink_name
             indices = frozenset(s.index for s in items)
             if (indices == self._known['outputs']
                     and default_name == self._known_defaults['outputs']):
@@ -567,7 +578,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
         except pulsectl.PulseError:
             pass
 
-    def refresh_inputs_tab(self):
+    def refresh_inputs_tab(self, server_info=None):
         """Rebuild the Inputs list if the set of sources or default changed."""
         try:
             # Exclude monitor sources (loopbacks mirroring outputs)
@@ -575,7 +586,9 @@ class VolumeOverlay(Adw.ApplicationWindow):
                 s for s in self.pulse.source_list()
                 if not s.name.endswith('.monitor')
             ]
-            default_name = self.pulse.server_info().default_source_name
+            if server_info is None:
+                server_info = self.pulse.server_info()
+            default_name = server_info.default_source_name
             indices = frozenset(s.index for s in items)
             if (indices == self._known['inputs']
                     and default_name == self._known_defaults['inputs']):
