@@ -14,7 +14,11 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("Gtk4LayerShell", "1.0")
-from gi.repository import Gtk, Gdk, Adw, Gtk4LayerShell, GLib  # noqa
+gi.require_version("Gsk", "4.0")
+gi.require_version("Graphene", "1.0")
+from gi.repository import (  # noqa
+    Gtk, Gdk, Adw, Gtk4LayerShell, GLib, Gsk, Graphene
+)
 
 
 # Custom CSS for rounded corners and the dimming effect
@@ -115,7 +119,45 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '-t', '--tab', choices=['apps', 'outputs', 'inputs'],
         default='apps', help='tab to show on startup (default: apps)')
+    parser.add_argument(
+        '--screenshot', metavar='PATH',
+        help=argparse.SUPPRESS)
     return parser.parse_args()
+
+
+def _capture_widget(widget, path):
+    """
+    Render a GTK widget to a PNG file with alpha transparency.
+    Uses Gsk.CairoRenderer so the window background is not composited.
+    """
+    w = widget.get_allocated_width()
+    h = widget.get_allocated_height()
+    if w <= 0 or h <= 0:
+        return False
+
+    snapshot = Gtk.Snapshot()
+    paintable = Gtk.WidgetPaintable.new(widget)
+    paintable.snapshot(snapshot, w, h)
+
+    node = snapshot.to_node()
+    if not node:
+        return False
+
+    native = widget.get_native()
+    if not native:
+        return False
+
+    renderer = Gsk.CairoRenderer()
+    renderer.realize(native.get_surface())
+
+    viewport = Graphene.Rect()
+    viewport.init(0, 0, w, h)
+    texture = renderer.render_texture(node, viewport)
+    renderer.unrealize()
+
+    if not texture:
+        return False
+    return texture.save_to_png(path)
 
 
 def _vol_pct(obj):
@@ -401,6 +443,16 @@ class VolumeOverlay(Adw.ApplicationWindow):
 
         # Switch to the requested startup tab
         self.view_stack.set_visible_child_name(self.args.tab)
+
+        # Schedule screenshot capture after first paint if requested
+        if self.args.screenshot:
+            GLib.idle_add(self._do_screenshot)
+
+    def _do_screenshot(self):
+        """Capture the window to a PNG file then quit."""
+        _capture_widget(self, self.args.screenshot)
+        self.get_application().quit()
+        return GLib.SOURCE_REMOVE
 
     # ------------------------------------------------------------------
     # PulseAudio control helpers
