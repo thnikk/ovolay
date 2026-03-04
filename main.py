@@ -112,6 +112,9 @@ def parse_args() -> argparse.Namespace:
         '-b', '--binds', nargs='+', choices=['udlr', 'hjkl', 'wasd'],
         default=['udlr', 'hjkl', 'wasd'],
         help='keybindings to enable (default: all)')
+    parser.add_argument(
+        '-t', '--tab', choices=['apps', 'outputs', 'inputs'],
+        default='apps', help='tab to show on startup (default: apps)')
     return parser.parse_args()
 
 
@@ -395,6 +398,9 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.refresh_outputs(server_info)
         self.refresh_inputs_tab(server_info)
         self._start_event_listener()
+
+        # Switch to the requested startup tab
+        self.view_stack.set_visible_child_name(self.args.tab)
 
     # ------------------------------------------------------------------
     # PulseAudio control helpers
