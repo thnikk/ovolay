@@ -29,3 +29,6 @@ These shortcuts are universal, regardless of the selected mode.
 | Enter         | Select default input/output    |
 | m             | Toggle mute                    |
 | Space         | Toggle mute                    |
+| Tab           | Next tab                       |
+| Shift + Tab   | Previous tab                   |
+| 1-3           | Switch to specific tab         |
