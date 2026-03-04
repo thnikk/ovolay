@@ -495,6 +495,15 @@ class VolumeOverlay(Adw.ApplicationWindow):
             lb.remove(child)
             child = lb.get_first_child()
 
+    def _count_rows(self, lb):
+        """Return the number of children in a list box."""
+        count = 0
+        child = lb.get_first_child()
+        while child:
+            count += 1
+            child = child.get_next_sibling()
+        return count
+
     def refresh_apps(self):
         """Rebuild the Apps list if the set of sink inputs changed."""
         try:
@@ -518,7 +527,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
                     bool(si.mute),
                     self._set_app_volume, self._set_app_mute)
                 lb.append(row)
-            self.selected_indices['apps'] = 0
+            # Clamp to keep position when items are removed
+            current = self.selected_indices['apps']
+            self.selected_indices['apps'] = min(
+                current, max(0, self._count_rows(lb) - 1))
             if self.current_tab == 'apps':
                 self.update_selection_visuals()
         except pulsectl.PulseError:
@@ -549,7 +561,9 @@ class VolumeOverlay(Adw.ApplicationWindow):
                     is_default=(sink.name == default_name),
                     set_default_cb=self._set_output_default)
                 lb.append(row)
-            self.selected_indices['outputs'] = 0
+            current = self.selected_indices['outputs']
+            self.selected_indices['outputs'] = min(
+                current, max(0, self._count_rows(lb) - 1))
             if self.current_tab == 'outputs':
                 self.update_selection_visuals()
         except pulsectl.PulseError:
@@ -584,7 +598,9 @@ class VolumeOverlay(Adw.ApplicationWindow):
                     is_default=(source.name == default_name),
                     set_default_cb=self._set_input_default)
                 lb.append(row)
-            self.selected_indices['inputs'] = 0
+            current = self.selected_indices['inputs']
+            self.selected_indices['inputs'] = min(
+                current, max(0, self._count_rows(lb) - 1))
             if self.current_tab == 'inputs':
                 self.update_selection_visuals()
         except pulsectl.PulseError:
