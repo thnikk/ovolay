@@ -85,6 +85,14 @@ CSS = """
     padding: 5px;
     border-radius: 24px;
 }
+
+viewswitcher {
+    background-color: transparent;
+}
+
+.tab-content {
+    background-color: transparent;
+}
 """
 
 
@@ -101,23 +109,21 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _vol_pct(obj):
+    """Return average channel volume as integer percentage."""
+    vals = obj.volume.values
+    return int(sum(vals) / len(vals) * 100)
+
+
 class VolumeSliderRow(Gtk.Box):
-    def __init__(self, sink_input, set_volume_cb, set_mute_cb):
+    def __init__(self, title, subtitle, index, initial_volume,
+                 is_muted, set_volume_cb, set_mute_cb):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
-        self.index = sink_input.index
+        self.index = index
         self.set_volume_cb = set_volume_cb
         self.set_mute_cb = set_mute_cb
-        self.is_muted = bool(sink_input.mute)
+        self.is_muted = bool(is_muted)
         self.is_selected_item = False
-
-        # Compute average channel volume as integer percentage
-        vol_vals = sink_input.volume.values
-        initial_volume = int(sum(vol_vals) / len(vol_vals) * 100)
-
-        # Extract app and media names from proplist
-        app_name = sink_input.proplist.get(
-            'application.name', 'Unknown Application')
-        media_name = sink_input.proplist.get('media.name')
 
         self.add_css_class("volume-row")
         self.set_hexpand(True)
@@ -143,16 +149,16 @@ class VolumeSliderRow(Gtk.Box):
         title_box.set_valign(Gtk.Align.CENTER)
 
         title_label = Gtk.Label()
-        title_label.set_text(app_name)
+        title_label.set_text(title)
         title_label.set_halign(Gtk.Align.START)
         title_label.set_ellipsize(3)
         title_label.set_max_width_chars(30)
         title_label.add_css_class("title-label")
         title_box.append(title_label)
 
-        if media_name and media_name != app_name:
+        if subtitle and subtitle != title:
             subtitle_label = Gtk.Label()
-            subtitle_label.set_text(media_name)
+            subtitle_label.set_text(subtitle)
             subtitle_label.set_halign(Gtk.Align.START)
             subtitle_label.set_ellipsize(3)
             subtitle_label.set_max_width_chars(35)
@@ -248,8 +254,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
     def __init__(self, args, **kwargs):
         super().__init__(**kwargs)
         self.args = args
-        self.current_inputs = None
-        self.selected_row_index = 0
+        self.current_tab = 'apps'
+        # Per-tab selection index and known-device-index cache
+        self.selected_indices = {'apps': 0, 'outputs': 0, 'inputs': 0}
+        self._known = {'apps': None, 'outputs': None, 'inputs': None}
         self._refresh_pending = False
 
         # PulseAudio connection for control operations (main thread only)
@@ -318,50 +326,107 @@ class VolumeOverlay(Adw.ApplicationWindow):
             header_box.set_end_widget(close_button)
             self.main_box.append(header_box)
 
-        self.list_box = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        self.list_box.add_css_class("boxed-list")
+        # Tab bar: ViewSwitcher selects pages in ViewStack
+        self.view_stack = Adw.ViewStack()
+        self.view_stack.add_css_class("tab-content")
+        switcher = Adw.ViewSwitcher()
+        switcher.set_stack(self.view_stack)
+        switcher.set_policy(Adw.ViewSwitcherPolicy.WIDE)
+        switcher.set_hexpand(True)
 
-        self.main_box.append(self.list_box)
+        # Build a list box for each tab and register it in the stack
+        self.list_boxes = {}
+        for tab_id, tab_title, icon in [
+            ('apps', 'Apps', 'application-x-executable-symbolic'),
+            ('outputs', 'Outputs', 'audio-speakers-symbolic'),
+            ('inputs', 'Inputs', 'audio-input-microphone-symbolic'),
+        ]:
+            lb = Gtk.Box(
+                orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            lb.add_css_class("boxed-list")
+            self.list_boxes[tab_id] = lb
+            page = self.view_stack.add_titled(lb, tab_id, tab_title)
+            page.set_icon_name(icon)
+
+        # Track the visible tab for keyboard navigation
+        self.view_stack.connect(
+            "notify::visible-child-name", self.on_tab_changed)
+
+        self.main_box.append(switcher)
+        self.main_box.append(self.view_stack)
         self.set_content(self.main_box)
 
-        # Key controller for keyboard navigation
+        # Key controller for keyboard navigation; capture phase ensures
+        # key events are handled before child widgets (e.g. ViewSwitcher)
         evk = Gtk.EventControllerKey()
+        evk.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         evk.connect("key-pressed", self.on_key_pressed)
         self.add_controller(evk)
 
         # Close pulse connection when the window is destroyed
         self.connect("destroy", lambda w: self.pulse.close())
 
-        self.refresh_inputs()
+        # Initial data load for all tabs
+        self.refresh_apps()
+        self.refresh_outputs()
+        self.refresh_inputs_tab()
         self._start_event_listener()
 
-    def _set_volume(self, index, volume_float):
-        # Look up the sink input by index and set its volume
+    # ------------------------------------------------------------------
+    # PulseAudio control helpers
+    # ------------------------------------------------------------------
+
+    def _lookup_and_call(self, list_fn, index, callback):
+        """Find object by index via list_fn() and invoke callback(obj)."""
         try:
-            for si in self.pulse.sink_input_list():
-                if si.index == index:
-                    self.pulse.volume_set_all_chans(si, volume_float)
+            for obj in list_fn():
+                if obj.index == index:
+                    callback(obj)
                     break
         except pulsectl.PulseError:
             pass
 
-    def _set_mute(self, index, muted):
-        # Look up the sink input by index and set its mute state
-        try:
-            for si in self.pulse.sink_input_list():
-                if si.index == index:
-                    self.pulse.mute(si, muted)
-                    break
-        except pulsectl.PulseError:
-            pass
+    def _set_app_volume(self, index, volume):
+        self._lookup_and_call(
+            self.pulse.sink_input_list, index,
+            lambda obj: self.pulse.volume_set_all_chans(obj, volume))
+
+    def _set_app_mute(self, index, muted):
+        self._lookup_and_call(
+            self.pulse.sink_input_list, index,
+            lambda obj: self.pulse.mute(obj, muted))
+
+    def _set_output_volume(self, index, volume):
+        self._lookup_and_call(
+            self.pulse.sink_list, index,
+            lambda obj: self.pulse.volume_set_all_chans(obj, volume))
+
+    def _set_output_mute(self, index, muted):
+        self._lookup_and_call(
+            self.pulse.sink_list, index,
+            lambda obj: self.pulse.mute(obj, muted))
+
+    def _set_input_volume(self, index, volume):
+        self._lookup_and_call(
+            self.pulse.source_list, index,
+            lambda obj: self.pulse.volume_set_all_chans(obj, volume))
+
+    def _set_input_mute(self, index, muted):
+        self._lookup_and_call(
+            self.pulse.source_list, index,
+            lambda obj: self.pulse.mute(obj, muted))
+
+    # ------------------------------------------------------------------
+    # Event listener
+    # ------------------------------------------------------------------
 
     def _start_event_listener(self):
-        # Watch for sink-input events in a daemon thread
+        # Watch for sink, source, and sink-input events in a daemon thread
         def listen():
             try:
                 with pulsectl.Pulse('ovolay-events') as pulse:
-                    pulse.event_mask_set('sink_input')
+                    pulse.event_mask_set(
+                        'sink_input', 'sink', 'source')
                     pulse.event_callback_set(self._on_pulse_event)
                     while True:
                         try:
@@ -382,43 +447,170 @@ class VolumeOverlay(Adw.ApplicationWindow):
     def _do_refresh(self):
         # Called on the main thread; clears the pending flag then refreshes
         self._refresh_pending = False
-        self.refresh_inputs()
+        self.refresh_apps()
+        self.refresh_outputs()
+        self.refresh_inputs_tab()
         return GLib.SOURCE_REMOVE
 
-    def move_selection(self, direction):
-        count = self.get_row_count()
-        if count == 0:
-            return
+    # ------------------------------------------------------------------
+    # Tab refresh methods
+    # ------------------------------------------------------------------
 
-        if self.args.wrap:
-            self.selected_row_index = (
-                self.selected_row_index + direction) % count
-        else:
-            self.selected_row_index = max(
-                0, min(self.selected_row_index + direction, count - 1))
-        self.update_selection_visuals()
+    def _clear_list(self, lb):
+        """Remove all children from a list box."""
+        child = lb.get_first_child()
+        while child:
+            lb.remove(child)
+            child = lb.get_first_child()
 
-    def select_by_index(self, index):
-        if index < self.get_row_count():
-            self.selected_row_index = index
+    def refresh_apps(self):
+        """Rebuild the Apps list if the set of sink inputs changed."""
+        try:
+            items = self.pulse.sink_input_list()
+            indices = frozenset(si.index for si in items)
+            if indices == self._known['apps']:
+                return
+            self._known['apps'] = indices
+            lb = self.list_boxes['apps']
+            self._clear_list(lb)
+            if not items:
+                lb.append(Gtk.Label(label="No applications"))
+                self.selected_indices['apps'] = 0
+                return
+            for si in sorted(items, key=lambda x: x.index):
+                title = si.proplist.get(
+                    'application.name', 'Unknown Application')
+                subtitle = si.proplist.get('media.name')
+                row = VolumeSliderRow(
+                    title, subtitle, si.index, _vol_pct(si),
+                    bool(si.mute),
+                    self._set_app_volume, self._set_app_mute)
+                lb.append(row)
+            self.selected_indices['apps'] = 0
+            if self.current_tab == 'apps':
+                self.update_selection_visuals()
+        except pulsectl.PulseError:
+            pass
+
+    def refresh_outputs(self):
+        """Rebuild the Outputs list if the set of sinks changed."""
+        try:
+            items = self.pulse.sink_list()
+            indices = frozenset(s.index for s in items)
+            if indices == self._known['outputs']:
+                return
+            self._known['outputs'] = indices
+            lb = self.list_boxes['outputs']
+            self._clear_list(lb)
+            if not items:
+                lb.append(Gtk.Label(label="No outputs"))
+                self.selected_indices['outputs'] = 0
+                return
+            for sink in sorted(items, key=lambda x: x.index):
+                row = VolumeSliderRow(
+                    sink.description, sink.name, sink.index,
+                    _vol_pct(sink), bool(sink.mute),
+                    self._set_output_volume, self._set_output_mute)
+                lb.append(row)
+            self.selected_indices['outputs'] = 0
+            if self.current_tab == 'outputs':
+                self.update_selection_visuals()
+        except pulsectl.PulseError:
+            pass
+
+    def refresh_inputs_tab(self):
+        """Rebuild the Inputs list if the set of sources changed."""
+        try:
+            # Exclude monitor sources (loopbacks mirroring outputs)
+            items = [
+                s for s in self.pulse.source_list()
+                if not s.name.endswith('.monitor')
+            ]
+            indices = frozenset(s.index for s in items)
+            if indices == self._known['inputs']:
+                return
+            self._known['inputs'] = indices
+            lb = self.list_boxes['inputs']
+            self._clear_list(lb)
+            if not items:
+                lb.append(Gtk.Label(label="No inputs"))
+                self.selected_indices['inputs'] = 0
+                return
+            for source in sorted(items, key=lambda x: x.index):
+                row = VolumeSliderRow(
+                    source.description, source.name, source.index,
+                    _vol_pct(source), bool(source.mute),
+                    self._set_input_volume, self._set_input_mute)
+                lb.append(row)
+            self.selected_indices['inputs'] = 0
+            if self.current_tab == 'inputs':
+                self.update_selection_visuals()
+        except pulsectl.PulseError:
+            pass
+
+    # ------------------------------------------------------------------
+    # Tab switching
+    # ------------------------------------------------------------------
+
+    def on_tab_changed(self, stack, param):
+        """Update current tab and refresh selection visuals."""
+        name = stack.get_visible_child_name()
+        if name:
+            self.current_tab = name
             self.update_selection_visuals()
 
+    # ------------------------------------------------------------------
+    # Navigation helpers (operate on the current visible tab)
+    # ------------------------------------------------------------------
+
     def get_row_count(self):
+        lb = self.list_boxes[self.current_tab]
         count = 0
-        row = self.list_box.get_first_child()
+        row = lb.get_first_child()
         while row:
             count += 1
             row = row.get_next_sibling()
         return count
 
     def update_selection_visuals(self):
+        lb = self.list_boxes[self.current_tab]
+        selected_idx = self.selected_indices[self.current_tab]
         index = 0
-        row = self.list_box.get_first_child()
+        row = lb.get_first_child()
         while row:
             if hasattr(row, 'set_selected'):
-                row.set_selected(index == self.selected_row_index)
+                row.set_selected(index == selected_idx)
             index += 1
             row = row.get_next_sibling()
+
+    def move_selection(self, direction):
+        count = self.get_row_count()
+        if count == 0:
+            return
+        idx = self.selected_indices[self.current_tab]
+        if self.args.wrap:
+            idx = (idx + direction) % count
+        else:
+            idx = max(0, min(idx + direction, count - 1))
+        self.selected_indices[self.current_tab] = idx
+        self.update_selection_visuals()
+
+    def select_by_index(self, index):
+        if index < self.get_row_count():
+            self.selected_indices[self.current_tab] = index
+            self.update_selection_visuals()
+
+    def get_selected_row(self):
+        lb = self.list_boxes[self.current_tab]
+        idx = self.selected_indices[self.current_tab]
+        i = 0
+        row = lb.get_first_child()
+        while row:
+            if i == idx:
+                return row
+            i += 1
+            row = row.get_next_sibling()
+        return None
 
     def adjust_selected_volume(self, delta):
         row = self.get_selected_row()
@@ -430,48 +622,37 @@ class VolumeOverlay(Adw.ApplicationWindow):
         if row and hasattr(row, 'toggle_mute'):
             row.toggle_mute()
 
-    def get_selected_row(self):
-        index = 0
-        row = self.list_box.get_first_child()
-        while row:
-            if index == self.selected_row_index:
-                return row
-            index += 1
-            row = row.get_next_sibling()
-        return None
+    # Tab order used for cycling and direct selection
+    TAB_ORDER = ['apps', 'outputs', 'inputs']
 
-    def refresh_inputs(self):
-        try:
-            inputs = self.pulse.sink_input_list()
-            new_indices = frozenset(si.index for si in inputs)
-
-            if new_indices != self.current_inputs:
-                self.current_inputs = new_indices
-
-                # Clear existing rows
-                child = self.list_box.get_first_child()
-                while child:
-                    self.list_box.remove(child)
-                    child = self.list_box.get_first_child()
-
-                if not inputs:
-                    self.list_box.append(
-                        Gtk.Label(label="No sink inputs"))
-                    self.selected_row_index = 0
-                else:
-                    for si in sorted(inputs, key=lambda x: x.index):
-                        self.list_box.append(VolumeSliderRow(
-                            si, self._set_volume, self._set_mute))
-                    self.selected_row_index = 0
-                    self.update_selection_visuals()
-
-        except pulsectl.PulseError:
-            pass
-        return True
+    def switch_tab(self, direction):
+        """Cycle to the next or previous tab by direction (+1/-1)."""
+        idx = self.TAB_ORDER.index(self.current_tab)
+        idx = (idx + direction) % len(self.TAB_ORDER)
+        self.view_stack.set_visible_child_name(self.TAB_ORDER[idx])
 
     def on_key_pressed(self, controller, keyval, keycode, state):
+        shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
+
         if keyval in (Gdk.KEY_Escape, Gdk.KEY_q):
             self.close()
+            return True
+
+        # Tab / Shift+Tab cycle through tabs
+        if keyval == Gdk.KEY_Tab:
+            self.switch_tab(-1 if shift else 1)
+            return True
+        if keyval == Gdk.KEY_ISO_Left_Tab:
+            # Shift+Tab often arrives as ISO_Left_Tab
+            self.switch_tab(-1)
+            return True
+
+        # 1-3 switch directly to a specific tab
+        if Gdk.KEY_1 <= keyval <= Gdk.KEY_3:
+            tab_idx = keyval - Gdk.KEY_1
+            if tab_idx < len(self.TAB_ORDER):
+                self.view_stack.set_visible_child_name(
+                    self.TAB_ORDER[tab_idx])
             return True
 
         if keyval in self.up_keys:
@@ -488,10 +669,6 @@ class VolumeOverlay(Adw.ApplicationWindow):
             return True
         elif keyval in (Gdk.KEY_m, Gdk.KEY_space):
             self.toggle_selected_mute()
-            return True
-        elif Gdk.KEY_1 <= keyval <= Gdk.KEY_9:
-            # Number keys 1-9 select items by position
-            self.select_by_index(keyval - Gdk.KEY_1)
             return True
         return False
 
