@@ -365,7 +365,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
             # Layer Shell configuration
             Gtk4LayerShell.init_for_window(self)
             Gtk4LayerShell.set_keyboard_mode(
-                self, Gtk4LayerShell.KeyboardMode.ON_DEMAND)
+                self, Gtk4LayerShell.KeyboardMode.EXCLUSIVE)
             Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.OVERLAY)
             Gtk4LayerShell.set_namespace(self, "volume-overlay")
 
