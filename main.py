@@ -1,10 +1,24 @@
 #!/usr/bin/python3 -u
-from ctypes import CDLL
-import threading
-import argparse
 import signal
 import sys
 import os
+
+# Signal a running daemon and exit before importing anything heavy.
+# This keeps the trigger path (ovolay with no args) near-instant.
+_runtime_dir = os.environ.get('XDG_RUNTIME_DIR', '/tmp')
+_pid_file = os.path.join(_runtime_dir, 'ovolay.pid')
+if '--daemon' not in sys.argv and '--_daemonized' not in sys.argv:
+    try:
+        with open(_pid_file) as _fh:
+            _pid = int(_fh.read().strip())
+        os.kill(_pid, signal.SIGUSR1)
+        sys.exit(0)
+    except (FileNotFoundError, ValueError, ProcessLookupError):
+        pass
+
+from ctypes import CDLL
+import threading
+import argparse
 import pulsectl
 
 # Pre-load the layer shell library
@@ -122,18 +136,22 @@ def get_pid_file() -> str:
     return os.path.join(runtime_dir, 'ovolay.pid')
 
 
-def _daemonize() -> None:
-    """Double-fork to detach from the controlling terminal."""
-    if os.fork() > 0:
-        os._exit(0)
-    os.setsid()
-    if os.fork() > 0:
-        os._exit(0)
-    # Redirect standard fds to /dev/null
-    devnull = os.open(os.devnull, os.O_RDWR)
-    for fd in (0, 1, 2):
-        os.dup2(devnull, fd)
-    os.close(devnull)
+def _spawn_daemon(pid_file: str) -> None:
+    """Launch a detached daemon child via Popen (no fork)."""
+    import subprocess
+    # Pass through all argv except --daemon; add --_daemonized so
+    # the child knows it is already detached and skips re-spawning.
+    child_argv = [
+        a for a in sys.argv if a != '--daemon'
+    ] + ['--_daemonized']
+    subprocess.Popen(
+        child_argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
 
 
 def _write_pid(pid_file: str) -> None:
@@ -171,6 +189,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--daemon', action='store_true',
         help='run as a background daemon; show window on SIGUSR1')
+    # Internal flag set by _spawn_daemon; not intended for direct use
+    parser.add_argument(
+        '--_daemonized', dest='daemonized', action='store_true',
+        help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
@@ -419,7 +441,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
 
             # Close on focus loss only in layer shell mode
             focus_controller = Gtk.EventControllerFocus()
-            focus_controller.connect("leave", lambda c: self.close())
+            focus_controller.connect("leave", lambda c: self._dismiss())
             self.add_controller(focus_controller)
 
         self.set_default_size(500, 1)
@@ -444,7 +466,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
         close_icon = Gtk.Image.new_from_icon_name("window-close-symbolic")
         close_button = Gtk.Button(css_classes=["close-button", "circular"])
         close_button.set_child(close_icon)
-        close_button.connect("clicked", lambda b: self.close())
+        close_button.connect("clicked", lambda b: self._dismiss())
         close_button.set_margin_start(10)
 
         tab_row = Gtk.CenterBox()
@@ -500,17 +522,20 @@ class VolumeOverlay(Adw.ApplicationWindow):
         if self.args.screenshot:
             GLib.idle_add(self._do_screenshot)
 
-    def do_close_request(self):
-        """Hide instead of destroy when running as a daemon."""
-        if self.args.daemon:
-            self.hide()
-            return True
-        return False
+    def _dismiss(self):
+        """Hide the window; in daemon mode keep it alive for reuse."""
+        if self.args.daemonized:
+            # Release exclusive keyboard grab so other apps keep input
+            Gtk4LayerShell.set_keyboard_mode(
+                self, Gtk4LayerShell.KeyboardMode.NONE)
+            self.set_visible(False)
+        else:
+            self.close()
 
     def _do_screenshot(self):
         """Capture the window to a PNG file then close."""
         _capture_widget(self, self.args.screenshot)
-        self.close()
+        self._dismiss()
         return GLib.SOURCE_REMOVE
 
     # ------------------------------------------------------------------
@@ -839,7 +864,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
         shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
 
         if keyval in (Gdk.KEY_Escape, Gdk.KEY_q):
-            self.close()
+            self._dismiss()
             return True
 
         # Tab / Shift+Tab cycle through tabs
@@ -886,8 +911,8 @@ class Application(Adw.Application):
         self.args = args
         self.win = None
 
-    def do_activate(self):
-        # Load CSS
+    def _load_css(self):
+        """Register application CSS with the current display."""
         provider = Gtk.CssProvider()
         provider.load_from_data(CSS.encode())
         Gtk.StyleContext.add_provider_for_display(
@@ -896,26 +921,40 @@ class Application(Adw.Application):
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
-        # Create window on first activation only
+    def _show_window(self):
+        """Show the overlay, creating it on the first call."""
         if self.win is None:
             self.win = VolumeOverlay(self.args, application=self)
+        if self.args.daemonized:
+            # Restore exclusive keyboard grab before making it visible
+            Gtk4LayerShell.set_keyboard_mode(
+                self.win, Gtk4LayerShell.KeyboardMode.EXCLUSIVE)
+            self.win.set_visible(True)
+        self.win.present()
 
-        if self.args.daemon:
-            # Keep the app alive with no visible windows
+    def do_activate(self):
+        self._load_css()
+        if self.args.daemonized:
+            # Pre-create and realize the window while hidden so the
+            # first signal can show it with minimal delay
             self.hold()
-            # Present the window when SIGUSR1 is received
+            self.win = VolumeOverlay(self.args, application=self)
+            # Present immediately so the compositor fully realizes the
+            # surface, then hide on the next idle tick before the user
+            # sees anything; subsequent shows are near-instant
+            self.win.present()
+            GLib.idle_add(lambda: self.win.set_visible(False) or False)
             GLib.unix_signal_add(
                 GLib.PRIORITY_DEFAULT,
                 signal.SIGUSR1,
-                self._on_show_signal
+                self._on_show_signal,
             )
         else:
-            self.win.present()
+            self._show_window()
 
     def _on_show_signal(self):
-        """Present the overlay window in response to SIGUSR1."""
-        if self.win:
-            self.win.present()
+        """Open the overlay in response to SIGUSR1."""
+        self._show_window()
         return GLib.SOURCE_CONTINUE
 
 
@@ -923,33 +962,8 @@ if __name__ == "__main__":
     args = parse_args()
     pid_file = get_pid_file()
 
-    if not args.daemon:
-        # Signal a running daemon, or launch normally
-        pid = _read_pid(pid_file)
-        if pid is not None:
-            try:
-                os.kill(pid, signal.SIGUSR1)
-                sys.exit(0)
-            except ProcessLookupError:
-                # Stale PID file from a crashed daemon
-                os.unlink(pid_file)
-        app = Application(args)
-        app.run()
-    else:
-        # Refuse to start a second daemon
-        pid = _read_pid(pid_file)
-        if pid is not None:
-            try:
-                os.kill(pid, 0)
-                print(
-                    "ovolay daemon is already running",
-                    file=sys.stderr
-                )
-                sys.exit(1)
-            except ProcessLookupError:
-                # Stale PID file
-                os.unlink(pid_file)
-        _daemonize()
+    if args.daemonized:
+        # Running as the detached child; write PID and start the loop
         _write_pid(pid_file)
         try:
             app = Application(args)
@@ -959,3 +973,22 @@ if __name__ == "__main__":
                 os.unlink(pid_file)
             except FileNotFoundError:
                 pass
+    elif args.daemon:
+        # Parent: guard against a duplicate daemon, then spawn child
+        pid = _read_pid(pid_file)
+        if pid is not None:
+            try:
+                os.kill(pid, 0)
+                print(
+                    'ovolay daemon is already running',
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            except ProcessLookupError:
+                # Stale PID file left by a crashed daemon
+                os.unlink(pid_file)
+        _spawn_daemon(pid_file)
+    else:
+        # Normal launch; stale PID file already cleared at top of file
+        app = Application(args)
+        app.run()
