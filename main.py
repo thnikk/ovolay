@@ -2,6 +2,9 @@
 from ctypes import CDLL
 import threading
 import argparse
+import signal
+import sys
+import os
 import pulsectl
 
 # Pre-load the layer shell library
@@ -113,6 +116,41 @@ viewswitcher {
 """
 
 
+def get_pid_file() -> str:
+    """Return the path to the daemon PID file."""
+    runtime_dir = os.environ.get('XDG_RUNTIME_DIR', '/tmp')
+    return os.path.join(runtime_dir, 'ovolay.pid')
+
+
+def _daemonize() -> None:
+    """Double-fork to detach from the controlling terminal."""
+    if os.fork() > 0:
+        os._exit(0)
+    os.setsid()
+    if os.fork() > 0:
+        os._exit(0)
+    # Redirect standard fds to /dev/null
+    devnull = os.open(os.devnull, os.O_RDWR)
+    for fd in (0, 1, 2):
+        os.dup2(devnull, fd)
+    os.close(devnull)
+
+
+def _write_pid(pid_file: str) -> None:
+    """Write the current PID to pid_file."""
+    with open(pid_file, 'w') as fh:
+        fh.write(str(os.getpid()))
+
+
+def _read_pid(pid_file: str):
+    """Read PID from pid_file; return None on error."""
+    try:
+        with open(pid_file) as fh:
+            return int(fh.read().strip())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -130,6 +168,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--window', action='store_true',
         help='run as a regular window without layer shell')
+    parser.add_argument(
+        '--daemon', action='store_true',
+        help='run as a background daemon; show window on SIGUSR1')
     return parser.parse_args()
 
 
@@ -458,6 +499,13 @@ class VolumeOverlay(Adw.ApplicationWindow):
         # Schedule screenshot capture after first paint if requested
         if self.args.screenshot:
             GLib.idle_add(self._do_screenshot)
+
+    def do_close_request(self):
+        """Hide instead of destroy when running as a daemon."""
+        if self.args.daemon:
+            self.hide()
+            return True
+        return False
 
     def _do_screenshot(self):
         """Capture the window to a PNG file then close."""
@@ -833,8 +881,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
 
 
 class Application(Adw.Application):
-    def __init__(self):
+    def __init__(self, args):
         super().__init__(application_id="com.thnikk.ovolay")
+        self.args = args
+        self.win = None
 
     def do_activate(self):
         # Load CSS
@@ -846,12 +896,66 @@ class Application(Adw.Application):
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
-        args = parse_args()
+        # Create window on first activation only
+        if self.win is None:
+            self.win = VolumeOverlay(self.args, application=self)
 
-        self.win = VolumeOverlay(args, application=self)
-        self.win.present()
+        if self.args.daemon:
+            # Keep the app alive with no visible windows
+            self.hold()
+            # Present the window when SIGUSR1 is received
+            GLib.unix_signal_add(
+                GLib.PRIORITY_DEFAULT,
+                signal.SIGUSR1,
+                self._on_show_signal
+            )
+        else:
+            self.win.present()
+
+    def _on_show_signal(self):
+        """Present the overlay window in response to SIGUSR1."""
+        if self.win:
+            self.win.present()
+        return GLib.SOURCE_CONTINUE
 
 
 if __name__ == "__main__":
-    app = Application()
-    app.run()
+    args = parse_args()
+    pid_file = get_pid_file()
+
+    if not args.daemon:
+        # Signal a running daemon, or launch normally
+        pid = _read_pid(pid_file)
+        if pid is not None:
+            try:
+                os.kill(pid, signal.SIGUSR1)
+                sys.exit(0)
+            except ProcessLookupError:
+                # Stale PID file from a crashed daemon
+                os.unlink(pid_file)
+        app = Application(args)
+        app.run()
+    else:
+        # Refuse to start a second daemon
+        pid = _read_pid(pid_file)
+        if pid is not None:
+            try:
+                os.kill(pid, 0)
+                print(
+                    "ovolay daemon is already running",
+                    file=sys.stderr
+                )
+                sys.exit(1)
+            except ProcessLookupError:
+                # Stale PID file
+                os.unlink(pid_file)
+        _daemonize()
+        _write_pid(pid_file)
+        try:
+            app = Application(args)
+            app.run()
+        finally:
+            try:
+                os.unlink(pid_file)
+            except FileNotFoundError:
+                pass
