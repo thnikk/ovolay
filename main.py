@@ -657,7 +657,9 @@ class VolumeOverlay(Adw.ApplicationWindow):
         """Rebuild the Apps list if the set of sink inputs changed."""
         try:
             items = self.pulse.sink_input_list()
-            indices = frozenset(si.index for si in items)
+            # Include volume and mute in cache key so changes redraw rows
+            indices = frozenset(
+                (si.index, _vol_pct(si), si.mute) for si in items)
             if indices == self._known['apps']:
                 return
             self._known['apps'] = indices
@@ -692,7 +694,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
             if server_info is None:
                 server_info = self.pulse.server_info()
             default_name = server_info.default_sink_name
-            indices = frozenset(s.index for s in items)
+            indices = frozenset(
+                (s.index, _vol_pct(s), s.mute) for s in items)
             if (indices == self._known['outputs']
                     and default_name == self._known_defaults['outputs']):
                 return
@@ -731,7 +734,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
             if server_info is None:
                 server_info = self.pulse.server_info()
             default_name = server_info.default_source_name
-            indices = frozenset(s.index for s in items)
+            indices = frozenset(
+                (s.index, _vol_pct(s), s.mute) for s in items)
             if (indices == self._known['inputs']
                     and default_name == self._known_defaults['inputs']):
                 return
