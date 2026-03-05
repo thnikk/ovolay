@@ -394,10 +394,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
         # Tab bar: ViewSwitcher selects pages in ViewStack
         self.view_stack = Adw.ViewStack()
         self.view_stack.add_css_class("tab-content")
-        switcher = Adw.ViewSwitcher()
-        switcher.set_stack(self.view_stack)
-        switcher.set_policy(Adw.ViewSwitcherPolicy.WIDE)
-        switcher.set_hexpand(True)
+        self.switcher = Adw.ViewSwitcher()
+        self.switcher.set_stack(self.view_stack)
+        self.switcher.set_policy(Adw.ViewSwitcherPolicy.WIDE)
+        self.switcher.set_hexpand(True)
 
         # Close button sits to the right of the tab switcher
         close_icon = Gtk.Image.new_from_icon_name("window-close-symbolic")
@@ -407,7 +407,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
         close_button.set_margin_start(10)
 
         tab_row = Gtk.CenterBox()
-        tab_row.set_center_widget(switcher)
+        tab_row.set_center_widget(self.switcher)
         tab_row.set_end_widget(close_button)
 
         # Build a list box for each tab and register it in the stack
@@ -460,9 +460,9 @@ class VolumeOverlay(Adw.ApplicationWindow):
             GLib.idle_add(self._do_screenshot)
 
     def _do_screenshot(self):
-        """Capture the window to a PNG file then quit."""
+        """Capture the window to a PNG file then close."""
         _capture_widget(self, self.args.screenshot)
-        self.get_application().quit()
+        self.close()
         return GLib.SOURCE_REMOVE
 
     # ------------------------------------------------------------------
