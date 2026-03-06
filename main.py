@@ -7,7 +7,9 @@ import os
 # This keeps the trigger path (ovolay with no args) near-instant.
 _runtime_dir = os.environ.get('XDG_RUNTIME_DIR', '/tmp')
 _pid_file = os.path.join(_runtime_dir, 'ovolay.pid')
-if '--daemon' not in sys.argv and '--_daemonized' not in sys.argv:
+if ('--daemon' not in sys.argv
+        and '--_daemonized' not in sys.argv
+        and '--debug' not in sys.argv):
     try:
         with open(_pid_file) as _fh:
             _pid = int(_fh.read().strip())
@@ -189,6 +191,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--daemon', action='store_true',
         help='run as a background daemon; show window on SIGUSR1')
+    parser.add_argument(
+        '--debug', action='store_true',
+        help='run daemon in the foreground for debugging')
     # Internal flag set by _spawn_daemon; not intended for direct use
     parser.add_argument(
         '--_daemonized', dest='daemonized', action='store_true',
@@ -953,6 +958,13 @@ class Application(Adw.Application):
                 signal.SIGUSR1,
                 self._on_show_signal,
             )
+            # SIGHUP recreates the window; useful after suspend/resume
+            # or monitor reconnection where the surface may be stale
+            GLib.unix_signal_add(
+                GLib.PRIORITY_DEFAULT,
+                signal.SIGHUP,
+                self._on_reset_signal,
+            )
         else:
             self._show_window()
 
@@ -961,12 +973,34 @@ class Application(Adw.Application):
         self._show_window()
         return GLib.SOURCE_CONTINUE
 
+    def _on_reset_signal(self):
+        """Recreate the window in response to SIGHUP."""
+        if self.win is not None:
+            self.win.destroy()
+            self.win = None
+        self._show_window()
+        # Re-hide immediately; signal is for recovery, not showing
+        GLib.idle_add(lambda: self.win.set_visible(False) or False)
+        return GLib.SOURCE_CONTINUE
+
 
 if __name__ == "__main__":
     args = parse_args()
     pid_file = get_pid_file()
 
-    if args.daemonized:
+    if args.debug:
+        # Run the daemon loop in the foreground without detaching
+        args.daemonized = True
+        _write_pid(pid_file)
+        try:
+            app = Application(args)
+            app.run()
+        finally:
+            try:
+                os.unlink(pid_file)
+            except FileNotFoundError:
+                pass
+    elif args.daemonized:
         # Running as the detached child; write PID and start the loop
         _write_pid(pid_file)
         try:
