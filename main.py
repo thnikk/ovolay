@@ -530,10 +530,13 @@ class VolumeOverlay(Adw.ApplicationWindow):
     def _dismiss(self):
         """Hide the window; in daemon mode keep it alive for reuse."""
         if self.args.daemonized:
+            if not self.get_visible():
+                return
             # Release exclusive keyboard grab so other apps keep input
             Gtk4LayerShell.set_keyboard_mode(
                 self, Gtk4LayerShell.KeyboardMode.NONE)
             self.set_visible(False)
+            print('window hidden')
         else:
             self.close()
 
@@ -939,6 +942,7 @@ class Application(Adw.Application):
             Gtk4LayerShell.set_keyboard_mode(
                 self.win, Gtk4LayerShell.KeyboardMode.EXCLUSIVE)
             self.win.set_visible(True)
+            print('window shown')
         self.win.present()
 
     def do_activate(self):
@@ -991,6 +995,7 @@ if __name__ == "__main__":
     if args.debug:
         # Run the daemon loop in the foreground without detaching
         args.daemonized = True
+        print(f'ovolay daemon started (pid {os.getpid()})')
         _write_pid(pid_file)
         try:
             app = Application(args)
@@ -1003,6 +1008,8 @@ if __name__ == "__main__":
     elif args.daemonized:
         # Running as the detached child; write PID and start the loop
         _write_pid(pid_file)
+        # Stderr is /dev/null in daemon mode so this is a no-op, but
+        # left here for clarity if that changes in future
         try:
             app = Application(args)
             app.run()
