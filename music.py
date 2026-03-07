@@ -1,5 +1,3 @@
-import math
-
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
@@ -84,7 +82,6 @@ class MusicTab(Gtk.Box):
             player_filter.lower() if player_filter else None)
         self._player = None
         self._dbus_proxy = None
-        self._art_pixbuf = None
         self._seeking = False
         self._track_id = None
         # Guard flag to avoid feedback loop when updating volume bar
@@ -92,12 +89,13 @@ class MusicTab(Gtk.Box):
         # Cache last art URL to avoid redundant reloads on volume change
         self._art_url = None
 
-        # Album art drawn with Cairo for rounded clipping
-        self._art = Gtk.DrawingArea()
+        # Album art displayed with Gtk.Picture (avoids Cairo/pycairo)
+        self._art = Gtk.Picture()
         self._art.set_size_request(self.ART_SIZE, self.ART_SIZE)
         self._art.set_valign(Gtk.Align.CENTER)
+        self._art.set_can_shrink(True)
+        self._art.set_content_fit(Gtk.ContentFit.COVER)
         self._art.add_css_class('music-art')
-        self._art.set_draw_func(self._draw_art)
         self.append(self._art)
 
         # Right panel: title, artist, seekbar, buttons
@@ -327,7 +325,6 @@ class MusicTab(Gtk.Box):
     def _clear_player(self):
         """Remove the current player reference and reset the UI."""
         self._player = None
-        self._art_pixbuf = None
         self._track_id = None
         self._art_url = None
         self._title_lbl.set_text('Nothing playing')
@@ -335,7 +332,7 @@ class MusicTab(Gtk.Box):
         self._seek_adj.set_upper(1)
         self._seek_adj.set_value(0)
         self._time_lbl.set_text('0:00/0:00')
-        self._art.queue_draw()
+        self._art.set_paintable(None)
 
     # ------------------------------------------------------------------
     # Metadata
@@ -430,9 +427,8 @@ class MusicTab(Gtk.Box):
 
     def _load_art(self, url):
         """Load album art from a file:// or https:// URL."""
-        self._art_pixbuf = None
         if not url:
-            self._art.queue_draw()
+            self._art.set_paintable(None)
             return
         if url.startswith('file://'):
             self._load_art_from_path(url[7:])
@@ -445,58 +441,28 @@ class MusicTab(Gtk.Box):
     def _load_art_from_path(self, path):
         """Load album art from a local filesystem path."""
         try:
-            self._art_pixbuf = (
-                GdkPixbuf.Pixbuf.new_from_file_at_scale(
-                    path, self.ART_SIZE, self.ART_SIZE, True))
+            pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                path, self.ART_SIZE, self.ART_SIZE, True)
+            texture = Gdk.Texture.new_for_pixbuf(pb)
+            self._art.set_paintable(texture)
         except Exception as e:
             print(f'music tab art load error: {e}')
-        self._art.queue_draw()
 
     def _on_art_loaded(self, gfile, result, url):
         """Callback for async remote art fetch; decode bytes to pixbuf."""
         try:
             ok, data, _ = gfile.load_contents_finish(result)
             if not ok or not data:
-                self._art.queue_draw()
                 return
             loader = GdkPixbuf.PixbufLoader.new()
             loader.write(bytes(data))
             loader.close()
             pb = loader.get_pixbuf()
             if pb:
-                self._art_pixbuf = pb.scale_simple(
-                    self.ART_SIZE, self.ART_SIZE,
-                    GdkPixbuf.InterpType.BILINEAR)
+                texture = Gdk.Texture.new_for_pixbuf(pb)
+                self._art.set_paintable(texture)
         except Exception as e:
             print(f'music tab remote art error: {e}')
-        self._art.queue_draw()
-
-    def _rounded_rect(self, cr, x, y, w, h, r):
-        """Trace a rounded rectangle path on the Cairo context."""
-        cr.new_path()
-        cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
-        cr.arc(x + w - r, y + r, r, 3 * math.pi / 2, 0)
-        cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
-        cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
-        cr.close_path()
-
-    def _draw_art(self, area, cr, width, height):
-        """Draw album art clipped to a rounded rectangle."""
-        cr.save()
-        self._rounded_rect(cr, 0, 0, width, height, 15)
-        cr.clip()
-        if self._art_pixbuf:
-            # Scale to fill the square and paint
-            pb = self._art_pixbuf.scale_simple(
-                width, height,
-                GdkPixbuf.InterpType.BILINEAR)
-            Gdk.cairo_set_source_pixbuf(cr, pb, 0, 0)
-            cr.paint()
-        else:
-            # Placeholder fill
-            cr.set_source_rgba(1, 1, 1, 0.05)
-            cr.paint()
-        cr.restore()
 
     # ------------------------------------------------------------------
     # Seekbar
