@@ -89,6 +89,8 @@ class MusicTab(Gtk.Box):
         self._track_id = None
         # Guard flag to avoid feedback loop when updating volume bar
         self._vol_updating = False
+        # Cache last art URL to avoid redundant reloads on volume change
+        self._art_url = None
 
         # Album art drawn with Cairo for rounded clipping
         self._art = Gtk.DrawingArea()
@@ -324,6 +326,7 @@ class MusicTab(Gtk.Box):
         self._player = None
         self._art_pixbuf = None
         self._track_id = None
+        self._art_url = None
         self._title_lbl.set_text('Nothing playing')
         self._artist_lbl.set_text('')
         self._seek_adj.set_upper(1)
@@ -386,7 +389,9 @@ class MusicTab(Gtk.Box):
                 art_url_v.unpack() if hasattr(art_url_v, 'unpack')
                 else art_url_v
             ) or ''
-            self._load_art(art_url)
+            if art_url != self._art_url:
+                self._art_url = art_url
+                self._load_art(art_url)
 
             status = self._get_prop(
                 self._player, 'PlaybackStatus', 'Stopped')
