@@ -13,6 +13,7 @@ CSS = """
     border-radius: 15px;
 }
 
+/*
 .music-seekbar trough {
     min-height: 6px;
     border-radius: 3px;
@@ -34,6 +35,7 @@ CSS = """
     border: none;
     box-shadow: none;
 }
+*/
 
 .music-button {
     border-radius: 50%;
@@ -47,12 +49,22 @@ CSS = """
     background: alpha(currentColor, 0.1);
 }
 
+.play-button {
+    padding: 10px;
+}
+
 .song-label {
     font-size: 28px;
 }
 .artist-label {
     font-size: 20px;
     opacity: 50%;
+}
+
+.music-time {
+    font-size: 13px;
+    opacity: 70%;
+    font-variant-numeric: tabular-nums;
 }
 
 """
@@ -75,6 +87,8 @@ class MusicTab(Gtk.Box):
         self._art_pixbuf = None
         self._seeking = False
         self._track_id = None
+        # Guard flag to avoid feedback loop when updating volume bar
+        self._vol_updating = False
 
         # Album art drawn with Cairo for rounded clipping
         self._art = Gtk.DrawingArea()
@@ -123,20 +137,53 @@ class MusicTab(Gtk.Box):
         self._seekbar.add_controller(press)
         right.append(self._seekbar)
 
-        # Playback buttons
-        btn_row = Gtk.Box(
+        # Bottom row: time | buttons | volume
+        btn_row = Gtk.CenterBox()
+        btn_row.set_valign(Gtk.Align.CENTER)
+
+        # Left: elapsed/total time display
+        self._time_lbl = Gtk.Label(label='0:00/0:00')
+        self._time_lbl.set_valign(Gtk.Align.CENTER)
+        self._time_lbl.add_css_class('music-time')
+        btn_row.set_start_widget(self._time_lbl)
+
+        # Center: prev / play / next
+        btns = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-        btn_row.set_halign(Gtk.Align.CENTER)
+        btns.set_valign(Gtk.Align.CENTER)
         self._prev_btn = self._make_btn(
             'media-skip-backward-symbolic', self._cmd_prev)
         self._play_btn = self._make_btn(
-            'media-playback-start-symbolic', self._cmd_play_pause)
+            'media-playback-start-symbolic',
+            self._cmd_play_pause, icon_size=24)
         self._play_btn.add_css_class('play-button')
         self._next_btn = self._make_btn(
             'media-skip-forward-symbolic', self._cmd_next)
-        btn_row.append(self._prev_btn)
-        btn_row.append(self._play_btn)
-        btn_row.append(self._next_btn)
+        btns.append(self._prev_btn)
+        btns.append(self._play_btn)
+        btns.append(self._next_btn)
+        btn_row.set_center_widget(btns)
+
+        # Right: volume scale with speaker icon
+        vol_box = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        vol_box.set_valign(Gtk.Align.CENTER)
+        self._vol_adj = Gtk.Adjustment(
+            value=100, lower=0, upper=100,
+            step_increment=1, page_increment=5)
+        self._vol_scale = Gtk.Scale(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            adjustment=self._vol_adj)
+        self._vol_scale.set_draw_value(False)
+        self._vol_scale.set_hexpand(True)
+        self._vol_scale.set_size_request(80, -1)
+        self._vol_scale.set_valign(Gtk.Align.CENTER)
+        self._vol_scale.add_css_class('music-seekbar')
+        self._vol_scale.connect(
+            'value-changed', self._on_vol_changed)
+        vol_box.append(self._vol_scale)
+
+        btn_row.set_end_widget(vol_box)
         right.append(btn_row)
 
         self.append(right)
@@ -144,13 +191,42 @@ class MusicTab(Gtk.Box):
         # Poll position and status every second
         GLib.timeout_add(1000, self._poll)
 
-    def _make_btn(self, icon, callback):
-        """Create a circular icon button."""
+    def _make_btn(self, icon, callback, icon_size=16):
+        """Create a circular icon button with optional icon size."""
         btn = Gtk.Button()
-        btn.set_child(Gtk.Image.new_from_icon_name(icon))
+        img = Gtk.Image.new_from_icon_name(icon)
+        img.set_pixel_size(icon_size)
+        btn.set_child(img)
         btn.add_css_class('music-button')
+        btn.set_valign(Gtk.Align.CENTER)
+        btn.set_halign(Gtk.Align.CENTER)
+        # Fix size so the hover highlight stays circular
+        size = icon_size + 24
+        btn.set_size_request(size, size)
         btn.connect('clicked', lambda b: callback())
         return btn
+
+    # ------------------------------------------------------------------
+    # Public keybind interface (called from VolumeOverlay)
+    # ------------------------------------------------------------------
+
+    def cmd_prev(self):
+        """Skip to the previous track."""
+        self._cmd_prev()
+
+    def cmd_next(self):
+        """Skip to the next track."""
+        self._cmd_next()
+
+    def adjust_volume(self, delta):
+        """Adjust MPRIS2 volume by delta (fraction, e.g. 0.05)."""
+        if self._player is None:
+            return
+        current = self._vol_adj.get_value() / 100.0
+        new_vol = max(0.0, min(1.0, current + delta))
+        # Update the scale; _on_vol_changed will forward to MPRIS2
+        self._vol_updating = False
+        self._vol_adj.set_value(new_vol * 100)
 
     # ------------------------------------------------------------------
     # D-Bus / MPRIS2
@@ -193,7 +269,7 @@ class MusicTab(Gtk.Box):
             print(f'music tab list names error: {e}')
 
     def _matches_player(self, bus_name):
-        """Return True if bus_name is an MPRIS2 player matching the filter."""
+        """Return True if bus_name is an MPRIS2 player matching filter."""
         prefix = 'org.mpris.MediaPlayer2.'
         if not bus_name.startswith(prefix):
             return False
@@ -252,6 +328,7 @@ class MusicTab(Gtk.Box):
         self._artist_lbl.set_text('')
         self._seek_adj.set_upper(1)
         self._seek_adj.set_value(0)
+        self._time_lbl.set_text('0:00/0:00')
         self._art.queue_draw()
 
     # ------------------------------------------------------------------
@@ -259,14 +336,14 @@ class MusicTab(Gtk.Box):
     # ------------------------------------------------------------------
 
     def _get_prop(self, proxy, name, default=None):
-        """Read a cached property from a Gio.DBusProxy as a Python value."""
+        """Read a cached property from a Gio.DBusProxy as Python."""
         variant = proxy.get_cached_property(name)
         if variant is None:
             return default
         return variant.unpack()
 
     def _update_metadata(self):
-        """Refresh title, artist, art, and duration from MPRIS2."""
+        """Refresh title, artist, art, duration, and volume."""
         if self._player is None:
             return
         try:
@@ -314,6 +391,7 @@ class MusicTab(Gtk.Box):
             status = self._get_prop(
                 self._player, 'PlaybackStatus', 'Stopped')
             self._update_play_icon(status)
+            self._sync_volume_bar()
         except Exception as e:
             print(f'music tab metadata error: {e}')
 
@@ -324,7 +402,19 @@ class MusicTab(Gtk.Box):
             if status == 'Playing'
             else 'media-playback-start-symbolic'
         )
-        self._play_btn.set_child(Gtk.Image.new_from_icon_name(icon))
+        img = Gtk.Image.new_from_icon_name(icon)
+        img.set_pixel_size(32)
+        self._play_btn.set_child(img)
+
+    def _sync_volume_bar(self):
+        """Read MPRIS2 Volume and update the scale without feedback."""
+        if self._player is None:
+            return
+        vol = self._get_prop(self._player, 'Volume', None)
+        if vol is not None and isinstance(vol, float):
+            self._vol_updating = True
+            self._vol_adj.set_value(vol * 100)
+            self._vol_updating = False
 
     # ------------------------------------------------------------------
     # Album art
@@ -417,8 +507,36 @@ class MusicTab(Gtk.Box):
                 print(f'music tab seek error: {e}')
         self._seeking = False
 
+    # ------------------------------------------------------------------
+    # Volume bar
+    # ------------------------------------------------------------------
+
+    def _on_vol_changed(self, scale):
+        """Send new volume to MPRIS2 player when the slider moves."""
+        if self._vol_updating or self._player is None:
+            return
+        vol = self._vol_adj.get_value() / 100.0
+        self._player.call(
+            'org.freedesktop.DBus.Properties.Set',
+            GLib.Variant('(ssv)', (
+                'org.mpris.MediaPlayer2.Player',
+                'Volume',
+                GLib.Variant('d', vol),
+            )),
+            Gio.DBusCallFlags.NONE, -1, None, None, None)
+
+    # ------------------------------------------------------------------
+    # Poll
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fmt_time(seconds):
+        """Format seconds as M:SS."""
+        s = int(seconds)
+        return f'{s // 60}:{s % 60:02d}'
+
     def _poll(self):
-        """Poll playback position and status every second."""
+        """Poll playback position, status, and volume every second."""
         if self._player and not self._seeking:
             try:
                 pos_v = self._player.call_sync(
@@ -428,9 +546,16 @@ class MusicTab(Gtk.Box):
                     Gio.DBusCallFlags.NONE, -1, None)
                 pos = pos_v.unpack()[0] / 1_000_000
                 self._seek_adj.set_value(pos)
+
+                total = self._seek_adj.get_upper()
+                self._time_lbl.set_text(
+                    f'{self._fmt_time(pos)}/{self._fmt_time(total)}'
+                )
+
                 status = self._get_prop(
                     self._player, 'PlaybackStatus', 'Stopped')
                 self._update_play_icon(status)
+                self._sync_volume_bar()
             except Exception:
                 pass
         return GLib.SOURCE_CONTINUE

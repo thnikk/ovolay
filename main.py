@@ -921,6 +921,25 @@ class VolumeOverlay(Adw.ApplicationWindow):
                     self.TAB_ORDER[tab_idx])
             return True
 
+        if self.current_tab == 'music':
+            # Music tab: left/right skip, up/down adjust volume
+            if keyval in self.left_keys:
+                self.music_tab.cmd_prev()
+                return True
+            elif keyval in self.right_keys:
+                self.music_tab.cmd_next()
+                return True
+            elif keyval in self.up_keys:
+                self.music_tab.adjust_volume(0.05)
+                return True
+            elif keyval in self.down_keys:
+                self.music_tab.adjust_volume(-0.05)
+                return True
+            elif keyval == Gdk.KEY_space:
+                self.music_tab._cmd_play_pause()
+                return True
+            return False
+
         if keyval in self.up_keys:
             self.move_selection(-1)
             return True
