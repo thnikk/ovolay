@@ -490,6 +490,11 @@ class VolumeOverlay(Adw.ApplicationWindow):
         tab_row.set_center_widget(self.switcher)
         tab_row.set_end_widget(close_button)
 
+        # Prevent focus on the tab bar; we handle navigation ourselves
+        close_button.set_focusable(False)
+        self.switcher.connect(
+            'realize', self._unfocus_switcher_children)
+
         # Build a list box for each tab and register it in the stack
         self.list_boxes = {}
         for tab_id, tab_title, icon in [
@@ -792,6 +797,20 @@ class VolumeOverlay(Adw.ApplicationWindow):
     # ------------------------------------------------------------------
     # Tab switching
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _walk_widgets(widget, callback):
+        """Recursively apply callback to widget and all descendants."""
+        callback(widget)
+        child = widget.get_first_child()
+        while child:
+            VolumeOverlay._walk_widgets(child, callback)
+            child = child.get_next_sibling()
+
+    def _unfocus_switcher_children(self, switcher):
+        """Mark all tab switcher descendants as non-focusable."""
+        self._walk_widgets(
+            switcher, lambda w: w.set_focusable(False))
 
     def on_tab_changed(self, stack, param):
         """Update current tab and refresh selection visuals."""
