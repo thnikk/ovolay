@@ -133,10 +133,10 @@ class MusicTab(Gtk.Box):
         self._seekbar.set_draw_value(False)
         self._seekbar.set_hexpand(True)
         self._seekbar.add_css_class('music-seekbar')
-        press = Gtk.GestureClick.new()
-        press.connect('pressed', self._on_seek_press)
-        press.connect('released', self._on_seek_release)
-        self._seekbar.add_controller(press)
+        # change-value fires on every user-driven drag step; use it to
+        # set the seeking flag and debounce the actual SetPosition call
+        self._seekbar.connect('change-value', self._on_seek_change)
+        self._seek_timer_id = None
         right.append(self._seekbar)
 
         # Bottom row: time | buttons | volume
@@ -499,18 +499,30 @@ class MusicTab(Gtk.Box):
     # Seekbar
     # ------------------------------------------------------------------
 
-    def _on_seek_press(self, gesture, n, x, y):
+    def _on_seek_change(self, scale, scroll_type, value):
+        """Handle user-driven seekbar movement with debounce."""
         self._seeking = True
+        # Cancel any pending seek call from a previous drag step
+        if self._seek_timer_id is not None:
+            GLib.source_remove(self._seek_timer_id)
+        # After 150 ms of inactivity, send the seek command and clear flag
+        self._seek_timer_id = GLib.timeout_add(
+            150, self._do_seek, value)
 
-    def _on_seek_release(self, gesture, n, x, y):
-        """Seek to the scale's current position."""
+    def _do_seek(self, value):
+        """Send SetPosition to the player and clear the seeking flag."""
+        self._seek_timer_id = None
         if self._player and self._track_id:
-            pos_us = int(self._seek_adj.get_value() * 1_000_000)
+            pos_us = int(value * 1_000_000)
             try:
-                self._player.SetPosition(self._track_id, pos_us)
+                self._player.call(
+                    'SetPosition',
+                    GLib.Variant('(ox)', (self._track_id, pos_us)),
+                    Gio.DBusCallFlags.NONE, -1, None, None, None)
             except Exception as e:
                 print(f'music tab seek error: {e}')
         self._seeking = False
+        return GLib.SOURCE_REMOVE
 
     # ------------------------------------------------------------------
     # Volume bar
