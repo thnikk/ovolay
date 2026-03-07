@@ -461,8 +461,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
             focus_controller.connect("leave", lambda c: self._dismiss())
             self.add_controller(focus_controller)
 
-        self.set_default_size(500, 1)
-        self.set_size_request(500, -1)
+        self.set_default_size(550, 1)
+        self.set_size_request(550, -1)
         self.add_css_class("overlay-window")
         if self.args.window:
             self.add_css_class("windowed")

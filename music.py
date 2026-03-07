@@ -46,13 +46,22 @@ CSS = """
 .music-button:hover {
     background: alpha(currentColor, 0.1);
 }
+
+.song-label {
+    font-size: 28px;
+}
+.artist-label {
+    font-size: 20px;
+    opacity: 50%;
+}
+
 """
 
 
 class MusicTab(Gtk.Box):
     """MPRIS2 media player controls with album art."""
 
-    ART_SIZE = 110
+    ART_SIZE = 200
 
     def __init__(self, player_filter=None):
         super().__init__(
@@ -79,19 +88,24 @@ class MusicTab(Gtk.Box):
         right = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL, spacing=8)
         right.set_hexpand(True)
-        right.set_valign(Gtk.Align.CENTER)
+
+        text_box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        text_box.set_vexpand(True)
 
         self._title_lbl = Gtk.Label(label='Nothing playing')
         self._title_lbl.set_halign(Gtk.Align.START)
         self._title_lbl.set_ellipsize(3)
-        self._title_lbl.add_css_class('title-label')
-        right.append(self._title_lbl)
+        self._title_lbl.add_css_class('song-label')
+        text_box.append(self._title_lbl)
 
         self._artist_lbl = Gtk.Label(label='')
         self._artist_lbl.set_halign(Gtk.Align.START)
         self._artist_lbl.set_ellipsize(3)
-        self._artist_lbl.add_css_class('subtitle-label')
-        right.append(self._artist_lbl)
+        self._artist_lbl.add_css_class('artist-label')
+        text_box.append(self._artist_lbl)
+
+        right.append(text_box)
 
         # Seekbar
         self._seek_adj = Gtk.Adjustment(
@@ -117,6 +131,7 @@ class MusicTab(Gtk.Box):
             'media-skip-backward-symbolic', self._cmd_prev)
         self._play_btn = self._make_btn(
             'media-playback-start-symbolic', self._cmd_play_pause)
+        self._play_btn.add_css_class('play-button')
         self._next_btn = self._make_btn(
             'media-skip-forward-symbolic', self._cmd_next)
         btn_row.append(self._prev_btn)
