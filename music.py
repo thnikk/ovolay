@@ -133,6 +133,7 @@ class MusicTab(Gtk.Box):
         self._seekbar.set_draw_value(False)
         self._seekbar.set_hexpand(True)
         self._seekbar.add_css_class('music-seekbar')
+        self._seekbar.set_focusable(False)
         # change-value fires on every user-driven drag step; use it to
         # set the seeking flag and debounce the actual SetPosition call
         self._seekbar.connect('change-value', self._on_seek_change)
@@ -157,7 +158,7 @@ class MusicTab(Gtk.Box):
             'media-skip-backward-symbolic', self._cmd_prev)
         self._play_btn = self._make_btn(
             'media-playback-start-symbolic',
-            self._cmd_play_pause, icon_size=24)
+            self._cmd_play_pause, icon_size=20)
         self._play_btn.add_css_class('play-button')
         self._next_btn = self._make_btn(
             'media-skip-forward-symbolic', self._cmd_next)
@@ -181,6 +182,7 @@ class MusicTab(Gtk.Box):
         self._vol_scale.set_size_request(80, -1)
         self._vol_scale.set_valign(Gtk.Align.CENTER)
         self._vol_scale.add_css_class('music-seekbar')
+        self._vol_scale.set_focusable(False)
         self._vol_scale.connect(
             'value-changed', self._on_vol_changed)
         vol_box.append(self._vol_scale)
@@ -200,6 +202,7 @@ class MusicTab(Gtk.Box):
         img.set_pixel_size(icon_size)
         btn.set_child(img)
         btn.add_css_class('music-button')
+        btn.set_focusable(False)
         btn.set_valign(Gtk.Align.CENTER)
         btn.set_halign(Gtk.Align.CENTER)
         # Fix size so the hover highlight stays circular
