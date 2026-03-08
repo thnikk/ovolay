@@ -151,6 +151,8 @@ class MusicTab(Gtk.Box):
         # Left: elapsed/total time display
         self._time_lbl = Gtk.Label(label='0:00/0:00')
         self._time_lbl.set_valign(Gtk.Align.CENTER)
+        self._time_lbl.set_halign(Gtk.Align.CENTER)
+        self._time_lbl.set_hexpand(True)
         self._time_lbl.add_css_class('music-time')
         btn_row.set_start_widget(self._time_lbl)
 
