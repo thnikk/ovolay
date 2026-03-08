@@ -67,6 +67,9 @@ CSS = """
 
 """
 
+# Priority used when picking a fallback after the active player exits
+_STATUS_PRIORITY = {'Playing': 0, 'Paused': 1, 'Stopped': 2}
+
 
 class MusicTab(Gtk.Box):
     """MPRIS2 media player controls with album art."""
@@ -80,13 +83,16 @@ class MusicTab(Gtk.Box):
         # Lowercase substring to match against the bus name suffix
         self._player_filter = (
             player_filter.lower() if player_filter else None)
-        self._player = None
+        # All live proxies keyed by bus name
+        self._proxies = {}
+        # Bus name of the player currently shown in the UI
+        self._last_played = None
         self._dbus_proxy = None
         self._seeking = False
         self._track_id = None
         # Guard flag to avoid feedback loop when updating volume bar
         self._vol_updating = False
-        # Cache last art URL to avoid redundant reloads on volume change
+        # Cache last art URL to avoid redundant reloads
         self._art_url = None
 
         # Album art displayed with Gtk.Picture (avoids Cairo/pycairo)
@@ -165,7 +171,7 @@ class MusicTab(Gtk.Box):
         btns.append(self._next_btn)
         btn_row.set_center_widget(btns)
 
-        # Right: volume scale with speaker icon
+        # Right: volume scale
         vol_box = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         vol_box.set_valign(Gtk.Align.CENTER)
@@ -181,8 +187,7 @@ class MusicTab(Gtk.Box):
         self._vol_scale.set_valign(Gtk.Align.CENTER)
         self._vol_scale.add_css_class('music-seekbar')
         self._vol_scale.set_focusable(False)
-        self._vol_scale.connect(
-            'value-changed', self._on_vol_changed)
+        self._vol_scale.connect('value-changed', self._on_vol_changed)
         vol_box.append(self._vol_scale)
 
         btn_row.set_end_widget(vol_box)
@@ -223,11 +228,11 @@ class MusicTab(Gtk.Box):
 
     def adjust_volume(self, delta):
         """Adjust MPRIS2 volume by delta (fraction, e.g. 0.05)."""
-        if self._player is None:
+        proxy = self._proxies.get(self._last_played)
+        if proxy is None:
             return
         current = self._vol_adj.get_value() / 100.0
         new_vol = max(0.0, min(1.0, current + delta))
-        # Update the scale; _on_vol_changed will forward to MPRIS2
         self._vol_updating = False
         self._vol_adj.set_value(new_vol * 100)
 
@@ -236,8 +241,7 @@ class MusicTab(Gtk.Box):
     # ------------------------------------------------------------------
 
     def _init_dbus(self):
-        """Enumerate existing MPRIS2 players and watch for new ones."""
-        # Watch for players appearing/disappearing via NameOwnerChanged
+        """Connect to the session bus and start watching MPRIS2 players."""
         Gio.DBusProxy.new_for_bus(
             Gio.BusType.SESSION,
             Gio.DBusProxyFlags.NONE,
@@ -250,24 +254,21 @@ class MusicTab(Gtk.Box):
         )
 
     def _on_dbus_proxy_ready(self, source, result):
-        """Finish async DBus proxy creation; list names and subscribe."""
+        """Subscribe to NameOwnerChanged and add proxies for all players."""
         try:
             self._dbus_proxy = Gio.DBusProxy.new_for_bus_finish(result)
         except Exception as e:
             print(f'music tab dbus proxy error: {e}')
             return
-        # Connect to NameOwnerChanged so we track players appearing/leaving
         self._dbus_proxy.connect('g-signal', self._on_dbus_signal)
-        # List current names to find any already-running players
+        # Add a proxy for every already-running matching player
         try:
-            result = self._dbus_proxy.call_sync(
+            res = self._dbus_proxy.call_sync(
                 'ListNames', None,
                 Gio.DBusCallFlags.NONE, -1, None)
-            names = result.unpack()[0]
-            for name in names:
+            for name in res.unpack()[0]:
                 if self._matches_player(name):
-                    self._connect_player(name)
-                    break
+                    self._add_player(name)
         except Exception as e:
             print(f'music tab list names error: {e}')
 
@@ -282,19 +283,21 @@ class MusicTab(Gtk.Box):
         return self._player_filter in suffix
 
     def _on_dbus_signal(self, proxy, sender, signal, params):
-        """Handle NameOwnerChanged to track MPRIS2 players."""
+        """Handle NameOwnerChanged to track players appearing/leaving."""
         if signal != 'NameOwnerChanged':
             return
         name, old_owner, new_owner = params.unpack()
         if not self._matches_player(name):
             return
-        if new_owner and self._player is None:
-            self._connect_player(name)
-        elif not new_owner and old_owner:
-            self._clear_player()
+        if new_owner:
+            self._add_player(name)
+        elif old_owner:
+            self._remove_player(name)
 
-    def _connect_player(self, bus_name):
-        """Create an async Gio.DBusProxy for the MPRIS2 player."""
+    def _add_player(self, bus_name):
+        """Create an async proxy for a newly seen player."""
+        if bus_name in self._proxies:
+            return
         Gio.DBusProxy.new_for_bus(
             Gio.BusType.SESSION,
             Gio.DBusProxyFlags.NONE,
@@ -304,38 +307,65 @@ class MusicTab(Gtk.Box):
             'org.mpris.MediaPlayer2.Player',
             None,
             self._on_player_proxy_ready,
+            bus_name,
         )
 
-    def _on_player_proxy_ready(self, source, result):
-        """Finish async player proxy creation and load metadata."""
+    def _on_player_proxy_ready(self, source, result, bus_name):
+        """Store the proxy, subscribe to changes, and seed the active player."""
         try:
-            self._player = Gio.DBusProxy.new_for_bus_finish(result)
+            proxy = Gio.DBusProxy.new_for_bus_finish(result)
         except Exception as e:
             print(f'music tab player proxy error: {e}')
             return
-        # PropertiesChanged signals fire when track or state changes
-        self._player.connect(
-            'g-properties-changed', self._on_properties_changed)
-        self._update_metadata()
+        self._proxies[bus_name] = proxy
+        proxy.connect(
+            'g-properties-changed',
+            self._on_properties_changed,
+            bus_name,
+        )
+        # If nothing is displayed yet, show this player immediately;
+        # it will be superseded if a Playing player appears later
+        if self._last_played is None:
+            self._last_played = bus_name
+            self._refresh_ui(proxy)
+        # If this player is already Playing, take over the display
+        status = self._get_prop(proxy, 'PlaybackStatus')
+        if status == 'Playing':
+            self._last_played = bus_name
+            self._refresh_ui(proxy)
 
-    def _on_properties_changed(self, proxy, changed, invalidated):
-        """Refresh UI when MPRIS2 properties change."""
-        self._update_metadata()
+    def _remove_player(self, bus_name):
+        """Drop a proxy and switch display if it was the active player."""
+        self._proxies.pop(bus_name, None)
+        if bus_name != self._last_played:
+            return
+        # Active player gone; pick the best remaining one
+        best_name = None
+        best_priority = 99
+        for name, proxy in self._proxies.items():
+            status = self._get_prop(proxy, 'PlaybackStatus', 'Stopped')
+            priority = _STATUS_PRIORITY.get(status, 3)
+            if priority < best_priority:
+                best_priority = priority
+                best_name = name
+        self._last_played = best_name
+        if best_name is not None:
+            self._refresh_ui(self._proxies[best_name])
+        else:
+            self._clear_ui()
 
-    def _clear_player(self):
-        """Remove the current player reference and reset the UI."""
-        self._player = None
-        self._track_id = None
-        self._art_url = None
-        self._title_lbl.set_text('Nothing playing')
-        self._artist_lbl.set_text('')
-        self._seek_adj.set_upper(1)
-        self._seek_adj.set_value(0)
-        self._time_lbl.set_text('0:00/0:00')
-        self._art.set_paintable(None)
+    def _on_properties_changed(self, proxy, changed, invalidated,
+                               bus_name):
+        """Switch active player on Playing; refresh UI for active player."""
+        status = self._get_prop(proxy, 'PlaybackStatus')
+        if status == 'Playing' and bus_name != self._last_played:
+            # A different player started playing; switch to it
+            self._last_played = bus_name
+        if bus_name == self._last_played:
+            self._refresh_ui(proxy)
 
     # ------------------------------------------------------------------
-    # Metadata
+    # UI refresh
     # ------------------------------------------------------------------
 
     def _get_prop(self, proxy, name, default=None):
@@ -345,13 +375,11 @@ class MusicTab(Gtk.Box):
             return default
         return variant.unpack()
 
-    def _update_metadata(self):
-        """Refresh title, artist, art, duration, and volume."""
-        if self._player is None:
-            return
+    def _refresh_ui(self, proxy):
+        """Update all UI elements from the given player proxy."""
         try:
-            meta = self._get_prop(self._player, 'Metadata', {})
-            # xesam:title may itself be a variant; unpack if needed
+            meta = self._get_prop(proxy, 'Metadata', {})
+
             title_v = meta.get('xesam:title')
             title = (
                 title_v.unpack() if hasattr(title_v, 'unpack')
@@ -393,12 +421,22 @@ class MusicTab(Gtk.Box):
                 self._art_url = art_url
                 self._load_art(art_url)
 
-            status = self._get_prop(
-                self._player, 'PlaybackStatus', 'Stopped')
+            status = self._get_prop(proxy, 'PlaybackStatus', 'Stopped')
             self._update_play_icon(status)
-            self._sync_volume_bar()
+            self._sync_volume_bar(proxy)
         except Exception as e:
-            print(f'music tab metadata error: {e}')
+            print(f'music tab ui refresh error: {e}')
+
+    def _clear_ui(self):
+        """Reset the UI to the idle/no-player state."""
+        self._track_id = None
+        self._art_url = None
+        self._title_lbl.set_text('Nothing playing')
+        self._artist_lbl.set_text('')
+        self._seek_adj.set_upper(1)
+        self._seek_adj.set_value(0)
+        self._time_lbl.set_text('0:00/0:00')
+        self._art.set_paintable(None)
 
     def _update_play_icon(self, status):
         """Switch the play button icon to match playback state."""
@@ -411,11 +449,9 @@ class MusicTab(Gtk.Box):
         img.set_pixel_size(32)
         self._play_btn.set_child(img)
 
-    def _sync_volume_bar(self):
-        """Read MPRIS2 Volume and update the scale without feedback."""
-        if self._player is None:
-            return
-        vol = self._get_prop(self._player, 'Volume', None)
+    def _sync_volume_bar(self, proxy):
+        """Read MPRIS2 Volume from proxy and update the scale."""
+        vol = self._get_prop(proxy, 'Volume', None)
         if vol is not None and isinstance(vol, float):
             self._vol_updating = True
             self._vol_adj.set_value(vol * 100)
@@ -433,7 +469,6 @@ class MusicTab(Gtk.Box):
         if url.startswith('file://'):
             self._load_art_from_path(url[7:])
         else:
-            # Fetch remote art asynchronously via Gio
             gfile = Gio.File.new_for_uri(url)
             gfile.load_contents_async(
                 None, self._on_art_loaded, url)
@@ -471,20 +506,19 @@ class MusicTab(Gtk.Box):
     def _on_seek_change(self, scale, scroll_type, value):
         """Handle user-driven seekbar movement with debounce."""
         self._seeking = True
-        # Cancel any pending seek call from a previous drag step
         if self._seek_timer_id is not None:
             GLib.source_remove(self._seek_timer_id)
-        # After 150 ms of inactivity, send the seek command and clear flag
         self._seek_timer_id = GLib.timeout_add(
             150, self._do_seek, value)
 
     def _do_seek(self, value):
-        """Send SetPosition to the player and clear the seeking flag."""
+        """Send SetPosition to the active player and clear seeking flag."""
         self._seek_timer_id = None
-        if self._player and self._track_id:
+        proxy = self._proxies.get(self._last_played)
+        if proxy and self._track_id:
             pos_us = int(value * 1_000_000)
             try:
-                self._player.call(
+                proxy.call(
                     'SetPosition',
                     GLib.Variant('(ox)', (self._track_id, pos_us)),
                     Gio.DBusCallFlags.NONE, -1, None, None, None)
@@ -498,11 +532,14 @@ class MusicTab(Gtk.Box):
     # ------------------------------------------------------------------
 
     def _on_vol_changed(self, scale):
-        """Send new volume to MPRIS2 player when the slider moves."""
-        if self._vol_updating or self._player is None:
+        """Send new volume to the active MPRIS2 player."""
+        if self._vol_updating:
+            return
+        proxy = self._proxies.get(self._last_played)
+        if proxy is None:
             return
         vol = self._vol_adj.get_value() / 100.0
-        self._player.call(
+        proxy.call(
             'org.freedesktop.DBus.Properties.Set',
             GLib.Variant('(ssv)', (
                 'org.mpris.MediaPlayer2.Player',
@@ -522,26 +559,25 @@ class MusicTab(Gtk.Box):
         return f'{s // 60}:{s % 60:02d}'
 
     def _poll(self):
-        """Poll playback position, status, and volume every second."""
-        if self._player and not self._seeking:
+        """Poll playback position and status every second."""
+        proxy = self._proxies.get(self._last_played)
+        if proxy and not self._seeking:
             try:
-                pos_v = self._player.call_sync(
+                pos_v = proxy.call_sync(
                     'org.freedesktop.DBus.Properties.Get',
                     GLib.Variant('(ss)', (
                         'org.mpris.MediaPlayer2.Player', 'Position')),
                     Gio.DBusCallFlags.NONE, -1, None)
                 pos = pos_v.unpack()[0] / 1_000_000
                 self._seek_adj.set_value(pos)
-
                 total = self._seek_adj.get_upper()
                 self._time_lbl.set_text(
                     f'{self._fmt_time(pos)}/{self._fmt_time(total)}'
                 )
-
                 status = self._get_prop(
-                    self._player, 'PlaybackStatus', 'Stopped')
+                    proxy, 'PlaybackStatus', 'Stopped')
                 self._update_play_icon(status)
-                self._sync_volume_bar()
+                self._sync_volume_bar(proxy)
             except Exception:
                 pass
         return GLib.SOURCE_CONTINUE
@@ -551,10 +587,11 @@ class MusicTab(Gtk.Box):
     # ------------------------------------------------------------------
 
     def _call(self, method):
-        """Fire-and-forget async call on the player proxy."""
-        if self._player is None:
+        """Fire-and-forget async call on the active player proxy."""
+        proxy = self._proxies.get(self._last_played)
+        if proxy is None:
             return
-        self._player.call(
+        proxy.call(
             method, None,
             Gio.DBusCallFlags.NONE, -1, None, None, None)
 
@@ -564,7 +601,9 @@ class MusicTab(Gtk.Box):
     def _cmd_play_pause(self):
         self._call('PlayPause')
         # Refresh icon shortly after to reflect new state
-        GLib.timeout_add(150, self._update_metadata)
+        proxy = self._proxies.get(self._last_played)
+        if proxy:
+            GLib.timeout_add(150, self._refresh_ui, proxy)
 
     def _cmd_next(self):
         self._call('Next')
