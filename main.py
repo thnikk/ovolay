@@ -709,10 +709,12 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.switcher.connect(
             'realize', self._unfocus_switcher_children)
 
-        # Build a list box for each tab and register it in the stack
+        # Build a list box for each tab and register it in the stack.
         # 3 items visible: 50px rows + 10px spacing each = 170px
         SCROLL_HEIGHT = 170
         self.list_boxes = {}
+        # ScrolledWindow per tab; populated only when --limit-height is set
+        self._scroll_windows = {}
         for tab_id, tab_title, icon in [
             ('apps', 'Apps', 'application-x-executable-symbolic'),
             ('outputs', 'Outputs', 'audio-speakers-symbolic'),
@@ -724,8 +726,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
             self.list_boxes[tab_id] = lb
             if self.args.limit_height:
                 # Wrap in a scroll box capped to ~3 items
-                tab_child = VScrollGradientBox(
+                scroll_box = VScrollGradientBox(
                     lb, max_height=SCROLL_HEIGHT)
+                self._scroll_windows[tab_id] = scroll_box._scroll
+                tab_child = scroll_box
             else:
                 tab_child = lb
             page = self.view_stack.add_titled(
@@ -1102,6 +1106,33 @@ class VolumeOverlay(Adw.ApplicationWindow):
             idx = max(0, min(idx + direction, count - 1))
         self.selected_indices[self.current_tab] = idx
         self.update_selection_visuals()
+        self._scroll_to_selected()
+
+    def _scroll_to_selected(self):
+        """Scroll the active tab's list so the selected row is visible.
+
+        Keeps one row of context above/below the selection so the
+        neighbour is always visible (unless at the list boundary).
+        """
+        sw = self._scroll_windows.get(self.current_tab)
+        if sw is None:
+            return
+        idx = self.selected_indices[self.current_tab]
+        # Row height from CSS min-height + list box spacing
+        row_h = 50
+        spacing = 10
+        stride = row_h + spacing
+        row_top = idx * stride
+        row_bot = row_top + row_h
+        adj = sw.get_vadjustment()
+        page = adj.get_page_size()
+        val = adj.get_value()
+        # Reveal one extra row above when scrolling up
+        if row_top - stride < val:
+            adj.set_value(max(0.0, row_top - stride))
+        # Reveal one extra row below when scrolling down
+        elif row_bot + stride > val + page:
+            adj.set_value(row_bot + stride - page)
 
     def select_by_index(self, index):
         if index < self.get_row_count():
