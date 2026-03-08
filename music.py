@@ -4,69 +4,6 @@ gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("Gio", "2.0")
 from gi.repository import Gtk, Gdk, GLib, GdkPixbuf, Gio  # noqa
 
-# CSS for the music tab; loaded by the caller alongside the main CSS
-CSS = """
-.music-art {
-    background-color: alpha(#ffffff, 0.05);
-    border-radius: 15px;
-}
-
-/*
-.music-seekbar trough {
-    min-height: 6px;
-    border-radius: 3px;
-    background-color: alpha(#ffffff, 0.1);
-    border: none;
-}
-
-.music-seekbar highlight {
-    background-color: @accent_bg_color;
-    border-radius: 3px;
-    border: none;
-}
-
-.music-seekbar slider {
-    min-width: 14px;
-    min-height: 14px;
-    border-radius: 7px;
-    background-color: #ffffff;
-    border: none;
-    box-shadow: none;
-}
-*/
-
-.music-button {
-    border-radius: 50%;
-    background: transparent;
-    box-shadow: none;
-    border: none;
-    padding: 6px;
-}
-
-.music-button:hover {
-    background: alpha(currentColor, 0.1);
-}
-
-.play-button {
-    padding: 10px;
-}
-
-.song-label {
-    font-size: 28px;
-}
-.artist-label {
-    font-size: 20px;
-    opacity: 50%;
-}
-
-.music-time {
-    font-size: 13px;
-    opacity: 70%;
-    font-variant-numeric: tabular-nums;
-}
-
-"""
-
 # Priority used when picking a fallback after the active player exits
 _STATUS_PRIORITY = {'Playing': 0, 'Paused': 1, 'Stopped': 2}
 

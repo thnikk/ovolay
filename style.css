@@ -1,0 +1,151 @@
+.overlay-window {
+    font-family: Nunito;
+    background-color: alpha(#1c1f26, 0.9);
+    color: #d8dee9;
+    border-radius: 30px;
+    border: 1px solid @borders;
+    padding: 20px;
+}
+
+.volume-row {
+    background-color: transparent;
+    border-radius: 10px;
+    padding: 0;
+}
+
+.volume-progress trough {
+    background-color: alpha(#ffffff, 0.1);
+    border: none;
+    min-height: 50px;
+    border-radius: 10px;
+    transition: background-color 0.15s;
+}
+
+.volume-row:selected .volume-progress trough,
+.volume-row.selected .volume-progress trough {
+    background-color: alpha(#ffffff, 0.2);
+}
+
+.volume-progress progress {
+    background-color: color-mix(in srgb, @accent_bg_color 20%, transparent);
+    border-radius: 10px 0 0 10px;
+    border: none;
+    min-height: 50px;
+}
+
+.volume-progress.muted progress {
+    background-color: alpha(red, 0.1);
+}
+
+.volume-row-content {
+    padding-left: 10px;
+}
+
+.boxed-list {
+    background-color: transparent;
+    min-height: 0;
+}
+
+.title-label {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.subtitle-label {
+    font-size: 12px;
+    opacity: 0.6;
+}
+
+.close-button {
+/*    padding: 5px; */
+    border-radius: 24px;
+    background: transparent;
+    box-shadow: none;
+    border: none;
+}
+
+.close-button:hover {
+    background: alpha(currentColor, 0.1);
+}
+
+viewswitcher {
+    background-color: transparent;
+}
+
+.tab-content {
+    background-color: transparent;
+}
+
+.default-icon {
+    opacity: 0.6;
+    padding-right: 10px;
+}
+
+.windowed {
+    border-radius: 0;
+    border: none;
+}
+
+.scroll-no-overshoot overshoot {
+    background: none;
+    box-shadow: none;
+}
+
+.music-art {
+    background-color: alpha(#ffffff, 0.05);
+    border-radius: 15px;
+}
+
+/*
+.music-seekbar trough {
+    min-height: 6px;
+    border-radius: 3px;
+    background-color: alpha(#ffffff, 0.1);
+    border: none;
+}
+
+.music-seekbar highlight {
+    background-color: @accent_bg_color;
+    border-radius: 3px;
+    border: none;
+}
+
+.music-seekbar slider {
+    min-width: 14px;
+    min-height: 14px;
+    border-radius: 7px;
+    background-color: #ffffff;
+    border: none;
+    box-shadow: none;
+}
+*/
+
+.music-button {
+    border-radius: 50%;
+    background: transparent;
+    box-shadow: none;
+    border: none;
+    padding: 6px;
+}
+
+.music-button:hover {
+    background: alpha(currentColor, 0.1);
+}
+
+.play-button {
+    padding: 10px;
+}
+
+.song-label {
+    font-size: 28px;
+}
+.artist-label {
+    font-size: 20px;
+    opacity: 50%;
+}
+
+.music-time {
+    font-size: 13px;
+    opacity: 70%;
+    font-variant-numeric: tabular-nums;
+}
