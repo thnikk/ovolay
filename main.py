@@ -318,7 +318,7 @@ class VScrollGradientBox(_ScrollGradientBase):
         fade_px = 40.0
         r, g, b = self._bg_color
         fr, fg, fb = self._flash_color
-        radius = 10
+        radius = 0
 
         top_op = min(val / fade_px, 1.0)
         bottom_op = min((upper - page - val) / fade_px, 1.0)
