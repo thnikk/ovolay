@@ -162,8 +162,8 @@ class MusicTab(Gtk.Box):
             'media-skip-backward-symbolic', self._cmd_prev)
         self._play_btn = self._make_btn(
             'media-playback-start-symbolic',
-            self._cmd_play_pause, icon_size=20)
-        self._play_btn.add_css_class('play-button')
+            self._cmd_play_pause, icon_size=24)
+        # self._play_btn.add_css_class('play-button')
         self._next_btn = self._make_btn(
             'media-skip-forward-symbolic', self._cmd_next)
         btns.append(self._prev_btn)
@@ -446,7 +446,7 @@ class MusicTab(Gtk.Box):
             else 'media-playback-start-symbolic'
         )
         img = Gtk.Image.new_from_icon_name(icon)
-        img.set_pixel_size(32)
+        img.set_pixel_size(24)
         self._play_btn.set_child(img)
 
     def _sync_volume_bar(self, proxy):

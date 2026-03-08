@@ -461,7 +461,8 @@ def _vol_pct(obj):
 class VolumeSliderRow(Gtk.Box):
     def __init__(self, title, subtitle, index, initial_volume,
                  is_muted, set_volume_cb, set_mute_cb,
-                 is_default=False, set_default_cb=None):
+                 is_default=False, set_default_cb=None,
+                 scroll_to_adjust=True):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.index = index
         self.set_volume_cb = set_volume_cb
@@ -469,6 +470,7 @@ class VolumeSliderRow(Gtk.Box):
         self.set_default_cb = set_default_cb
         self.is_muted = bool(is_muted)
         self.is_selected_item = False
+        self.scroll_to_adjust = scroll_to_adjust
 
         self.add_css_class("volume-row")
         self.set_hexpand(True)
@@ -574,6 +576,9 @@ class VolumeSliderRow(Gtk.Box):
         self.toggle_mute()
 
     def on_scroll(self, controller, dx, dy):
+        if not self.scroll_to_adjust:
+            # Let the event bubble up to the parent ScrolledWindow
+            return False
         self.adjust_volume(-dy * 2)
         return True
 
@@ -954,7 +959,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
                 row = VolumeSliderRow(
                     title, subtitle, si.index, _vol_pct(si),
                     bool(si.mute),
-                    self._set_app_volume, self._set_app_mute)
+                    self._set_app_volume, self._set_app_mute,
+                    scroll_to_adjust=not self.args.limit_height)
                 lb.append(row)
             # Clamp to keep position when items are removed
             current = self.selected_indices['apps']
@@ -991,7 +997,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
                     _vol_pct(sink), bool(sink.mute),
                     self._set_output_volume, self._set_output_mute,
                     is_default=(sink.name == default_name),
-                    set_default_cb=self._set_output_default)
+                    set_default_cb=self._set_output_default,
+                    scroll_to_adjust=not self.args.limit_height)
                 lb.append(row)
             current = self.selected_indices['outputs']
             self.selected_indices['outputs'] = min(
@@ -1031,7 +1038,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
                     _vol_pct(source), bool(source.mute),
                     self._set_input_volume, self._set_input_mute,
                     is_default=(source.name == default_name),
-                    set_default_cb=self._set_input_default)
+                    set_default_cb=self._set_input_default,
+                    scroll_to_adjust=not self.args.limit_height)
                 lb.append(row)
             current = self.selected_indices['inputs']
             self.selected_indices['inputs'] = min(
