@@ -7,9 +7,7 @@ import os
 # This keeps the trigger path (ovolay with no args) near-instant.
 _runtime_dir = os.environ.get('XDG_RUNTIME_DIR', '/tmp')
 _pid_file = os.path.join(_runtime_dir, 'ovolay.pid')
-if ('--daemon' not in sys.argv
-        and '--_daemonized' not in sys.argv
-        and '--debug' not in sys.argv):
+if '--daemon' not in sys.argv:
     try:
         with open(_pid_file) as _fh:
             _pid = int(_fh.read().strip())
@@ -146,23 +144,6 @@ def get_pid_file() -> str:
     return os.path.join(runtime_dir, 'ovolay.pid')
 
 
-def _spawn_daemon(pid_file: str) -> None:
-    """Launch a detached daemon child via Popen (no fork)."""
-    import subprocess
-    # Pass through all argv except --daemon; add --_daemonized so
-    # the child knows it is already detached and skips re-spawning.
-    child_argv = [
-        a for a in sys.argv if a != '--daemon'
-    ] + ['--_daemonized']
-    subprocess.Popen(
-        child_argv,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-        close_fds=True,
-    )
-
 
 def _write_pid(pid_file: str) -> None:
     """Write the current PID to pid_file."""
@@ -202,14 +183,8 @@ def parse_args() -> argparse.Namespace:
         help='MPRIS2 player name to use (default: first found)')
     parser.add_argument(
         '--daemon', action='store_true',
-        help='run as a background daemon; show window on SIGUSR1')
-    parser.add_argument(
-        '--debug', action='store_true',
-        help='run daemon in the foreground for debugging')
-    # Internal flag set by _spawn_daemon; not intended for direct use
-    parser.add_argument(
-        '--_daemonized', dest='daemonized', action='store_true',
-        help=argparse.SUPPRESS)
+        help='run as a foreground daemon; show window on SIGUSR1')
+    parser.set_defaults(daemonized=False)
     return parser.parse_args()
 
 
@@ -1055,8 +1030,9 @@ if __name__ == "__main__":
     args = parse_args()
     pid_file = get_pid_file()
 
-    if args.debug:
-        # Run the daemon loop in the foreground without detaching
+    if args.daemon:
+        # Run daemon in the foreground; set daemonized so the
+        # Application activates signal handling and hide/show logic
         args.daemonized = True
         print(f'ovolay daemon started (pid {os.getpid()})')
         _write_pid(pid_file)
@@ -1068,34 +1044,6 @@ if __name__ == "__main__":
                 os.unlink(pid_file)
             except FileNotFoundError:
                 pass
-    elif args.daemonized:
-        # Running as the detached child; write PID and start the loop
-        _write_pid(pid_file)
-        # Stderr is /dev/null in daemon mode so this is a no-op, but
-        # left here for clarity if that changes in future
-        try:
-            app = Application(args)
-            app.run()
-        finally:
-            try:
-                os.unlink(pid_file)
-            except FileNotFoundError:
-                pass
-    elif args.daemon:
-        # Parent: guard against a duplicate daemon, then spawn child
-        pid = _read_pid(pid_file)
-        if pid is not None:
-            try:
-                os.kill(pid, 0)
-                print(
-                    'ovolay daemon is already running',
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            except ProcessLookupError:
-                # Stale PID file left by a crashed daemon
-                os.unlink(pid_file)
-        _spawn_daemon(pid_file)
     else:
         # Normal launch; stale PID file already cleared at top of file
         app = Application(args)
