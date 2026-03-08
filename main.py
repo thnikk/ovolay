@@ -22,6 +22,8 @@ if ('--daemon' not in sys.argv
 from ctypes import CDLL
 import threading
 import argparse
+import math
+import cairo
 import pulsectl
 
 # Pre-load the layer shell library
@@ -135,10 +137,231 @@ viewswitcher {
     border-radius: 0;
     border: none;
 }
+
+.scroll-no-overshoot overshoot {
+    background: none;
+    box-shadow: none;
+}
 """
 
 # Append music tab CSS from the music module
 CSS = CSS + _music_module.CSS
+
+
+def _parse_color(color):
+    """Convert color to (r, g, b) float tuple.
+
+    Accepts a float tuple, byte tuple (0-255), or hex string.
+    """
+    if isinstance(color, str):
+        h = color.lstrip('#')
+        return tuple(int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    if any(v > 1.0 for v in color):
+        return tuple(v / 255.0 for v in color)
+    return tuple(color)
+
+
+def _suppress_overshoot(scrolled_window):
+    """Hide the built-in overshoot highlight on a ScrolledWindow."""
+    scrolled_window.add_css_class("scroll-no-overshoot")
+
+
+class _ScrollGradientBase(Gtk.Overlay):
+    """Shared base for scroll gradient overlay boxes."""
+
+    GRADIENT_SIZE = 30
+    # #1c1f26 as floats matching .overlay-window background
+    BG = (0.11, 0.122, 0.149)
+    FLASH = (0.3, 0.36, 0.47)
+
+    def __init__(
+            self, child, gradient_size=None,
+            bg_color=None, flash_color=None):
+        super().__init__()
+        self._gradient_size = (
+            gradient_size if gradient_size is not None
+            else self.GRADIENT_SIZE
+        )
+        self._bg_color = (
+            _parse_color(bg_color) if bg_color else self.BG
+        )
+        self._flash_color = (
+            _parse_color(flash_color) if flash_color else self.FLASH
+        )
+        self._flash_opacity = 0.0
+        self._flash_dir = 0
+        self._anim_id = None
+        self.set_overflow(Gtk.Overflow.HIDDEN)
+
+        self._scroll = self._make_scroll()
+        self._scroll.set_child(child)
+        self.set_child(self._scroll)
+
+        self._canvas = Gtk.DrawingArea()
+        self._canvas.set_can_target(False)
+        self._canvas.set_draw_func(self._draw)
+        self.add_overlay(self._canvas)
+
+        adj = self._get_adjustment()
+        adj.connect(
+            "value-changed", lambda *_: self._canvas.queue_draw())
+        adj.connect(
+            "changed", lambda *_: self._canvas.queue_draw())
+
+        self._scroll_controller = Gtk.EventControllerScroll.new(
+            Gtk.EventControllerScrollFlags.BOTH_AXES)
+        self._scroll_controller.connect(
+            "scroll", self._on_scroll_event)
+        self._scroll.add_controller(self._scroll_controller)
+
+    def _on_scroll_event(self, _controller, dx, dy):
+        # Use dy for vertical boxes, dx for horizontal
+        delta = dy if hasattr(self, '_sw_height') else dx
+        if delta == 0:
+            return False
+        adj = self._get_adjustment()
+        val = adj.get_value()
+        max_val = adj.get_upper() - adj.get_page_size()
+        if max_val <= 0:
+            return False
+        if delta < 0 and val <= 0:
+            self._start_flash(-1)
+        elif delta > 0 and val >= max_val - 0.1:
+            self._start_flash(1)
+        return False
+
+    def _make_scroll(self):
+        raise NotImplementedError
+
+    def _get_adjustment(self):
+        raise NotImplementedError
+
+    def _start_flash(self, direction):
+        """Animate a brief edge-flash to signal an overscroll attempt."""
+        if self._anim_id:
+            GLib.source_remove(self._anim_id)
+        self._flash_opacity = 0.7
+        self._flash_dir = direction
+
+        def _fade():
+            self._flash_opacity -= 0.05
+            if self._flash_opacity <= 0.0:
+                self._flash_opacity = 0.0
+                self._anim_id = None
+                self._canvas.queue_draw()
+                return False
+            self._canvas.queue_draw()
+            return True
+
+        self._anim_id = GLib.timeout_add(16, _fade)
+
+    def _rounded_rect(self, cr, x, y, w, h, r):
+        """Trace a rounded rectangle path."""
+        cr.new_sub_path()
+        cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+        cr.arc(x + w - r, y + r, r, 3 * math.pi / 2, 2 * math.pi)
+        cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+        cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+        cr.close_path()
+
+    def _draw(self, _area, cr, width, height, *_args):
+        raise NotImplementedError
+
+
+class VScrollGradientBox(_ScrollGradientBase):
+    """Wrap a child in a vertical ScrolledWindow with gradient edges.
+
+    Provides edge-fade gradients and an overscroll flash effect.
+    """
+
+    def __init__(
+            self, child, height=0, max_height=None, width=0,
+            gradient_size=None, bg_color=None, flash_color=None):
+        # Store before super().__init__() calls _make_scroll()
+        self._sw_height = height
+        self._max_height = max_height
+        self._sw_width = width
+        super().__init__(
+            child, gradient_size=gradient_size,
+            bg_color=bg_color, flash_color=flash_color)
+
+    def _make_scroll(self):
+        sw = Gtk.ScrolledWindow(hexpand=True)
+        sw.set_overflow(Gtk.Overflow.HIDDEN)
+        sw.set_policy(
+            Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        sw.set_propagate_natural_height(True)
+        sw.set_kinetic_scrolling(False)
+        _suppress_overshoot(sw)
+        if self._sw_width > 0:
+            sw.set_min_content_width(self._sw_width)
+            sw.set_max_content_width(self._sw_width)
+            sw.set_propagate_natural_width(False)
+            self.set_size_request(self._sw_width, -1)
+        if self._sw_height > 0:
+            sw.set_min_content_height(self._sw_height)
+            sw.set_max_content_height(self._sw_height)
+        if self._max_height is not None:
+            sw.set_vexpand(True)
+            sw.set_max_content_height(self._max_height)
+        return sw
+
+    def _get_adjustment(self):
+        return self._scroll.get_vadjustment()
+
+    def _draw(self, _area, cr, width, height, *_args):
+        adj = self._get_adjustment()
+        val = adj.get_value()
+        upper = adj.get_upper()
+        page = adj.get_page_size()
+        gs = self._gradient_size
+        fade_px = 40.0
+        r, g, b = self._bg_color
+        fr, fg, fb = self._flash_color
+        radius = 10
+
+        top_op = min(val / fade_px, 1.0)
+        bottom_op = min((upper - page - val) / fade_px, 1.0)
+
+        cr.save()
+        self._rounded_rect(cr, 0, 0, width, height, radius)
+        cr.clip()
+
+        if top_op > 0:
+            pat = cairo.LinearGradient(0, 0, 0, gs)
+            pat.add_color_stop_rgba(0, r, g, b, top_op)
+            pat.add_color_stop_rgba(1, r, g, b, 0.0)
+            cr.rectangle(0, 0, width, gs)
+            cr.set_source(pat)
+            cr.fill()
+        if bottom_op > 0:
+            pat = cairo.LinearGradient(0, height - gs, 0, height)
+            pat.add_color_stop_rgba(0, r, g, b, 0.0)
+            pat.add_color_stop_rgba(1, r, g, b, bottom_op)
+            cr.rectangle(0, height - gs, width, gs)
+            cr.set_source(pat)
+            cr.fill()
+
+        if self._flash_opacity > 0:
+            if self._flash_dir == -1:
+                pat = cairo.LinearGradient(0, 0, 0, gs)
+                pat.add_color_stop_rgba(
+                    0, fr, fg, fb, self._flash_opacity)
+                pat.add_color_stop_rgba(1, fr, fg, fb, 0.0)
+                cr.rectangle(0, 0, width, gs)
+                cr.set_source(pat)
+                cr.fill()
+            elif self._flash_dir == 1:
+                pat = cairo.LinearGradient(
+                    0, height - gs, 0, height)
+                pat.add_color_stop_rgba(0, fr, fg, fb, 0.0)
+                pat.add_color_stop_rgba(
+                    1, fr, fg, fb, self._flash_opacity)
+                cr.rectangle(0, height - gs, width, gs)
+                cr.set_source(pat)
+                cr.fill()
+
+        cr.restore()
 
 
 def get_pid_file() -> str:
@@ -187,6 +410,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '-d', '--daemon', action='store_true',
         help='run as a foreground daemon; show window on SIGUSR1')
+    parser.add_argument(
+        '-l', '--limit-height', action='store_true',
+        help='limit tab height to ~3 visible items using scroll boxes')
     parser.set_defaults(daemonized=False)
     return parser.parse_args()
 
@@ -440,9 +666,13 @@ class VolumeOverlay(Adw.ApplicationWindow):
             ]:
                 Gtk4LayerShell.set_anchor(self, edge, False)
 
-            # Close on focus loss only in layer shell mode
+            # Close on focus loss only in layer shell mode.
+            # Defer the dismiss by one idle tick so that tab switches
+            # (which briefly move focus before re-seating it) do not
+            # accidentally close the window.
             focus_controller = Gtk.EventControllerFocus()
-            focus_controller.connect("leave", lambda c: self._dismiss())
+            focus_controller.connect(
+                "leave", lambda c: GLib.idle_add(self._dismiss_if_unfocused))
             self.add_controller(focus_controller)
 
         self.set_default_size(550, 1)
@@ -480,6 +710,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
             'realize', self._unfocus_switcher_children)
 
         # Build a list box for each tab and register it in the stack
+        # 3 items visible: 50px rows + 10px spacing each = 170px
+        SCROLL_HEIGHT = 170
         self.list_boxes = {}
         for tab_id, tab_title, icon in [
             ('apps', 'Apps', 'application-x-executable-symbolic'),
@@ -490,7 +722,14 @@ class VolumeOverlay(Adw.ApplicationWindow):
                 orientation=Gtk.Orientation.VERTICAL, spacing=10)
             lb.add_css_class("boxed-list")
             self.list_boxes[tab_id] = lb
-            page = self.view_stack.add_titled(lb, tab_id, tab_title)
+            if self.args.limit_height:
+                # Wrap in a scroll box capped to ~3 items
+                tab_child = VScrollGradientBox(
+                    lb, max_height=SCROLL_HEIGHT)
+            else:
+                tab_child = lb
+            page = self.view_stack.add_titled(
+                tab_child, tab_id, tab_title)
             page.set_icon_name(icon)
 
         # Music tab has its own widget rather than a generic list box
@@ -546,6 +785,12 @@ class VolumeOverlay(Adw.ApplicationWindow):
             print('window hidden')
         else:
             self.close()
+
+    def _dismiss_if_unfocused(self):
+        """Dismiss only if the window still has no focus after idle."""
+        if not self.is_active():
+            self._dismiss()
+        return GLib.SOURCE_REMOVE
 
     def _do_screenshot(self):
         """Capture the window to a PNG file then close."""
