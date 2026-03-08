@@ -310,10 +310,12 @@ class VolumeSliderRow(Gtk.Box):
         self.add_controller(sc)
 
         # Left-click drag to set volume
+        self.dragging = False
         self.drag_gesture = Gtk.GestureDrag.new()
         self.drag_gesture.set_button(1)
         self.drag_gesture.connect("drag-begin", self.on_drag_begin)
         self.drag_gesture.connect("drag-update", self.on_drag_update)
+        self.drag_gesture.connect("drag-end", self.on_drag_end)
         self.add_controller(self.drag_gesture)
 
         # Right-click to toggle mute
@@ -331,12 +333,16 @@ class VolumeSliderRow(Gtk.Box):
             self.adjustment.set_value(volume)
 
     def on_drag_begin(self, gesture, start_x, start_y):
+        self.dragging = True
         self.update_volume_from_x(start_x)
 
     def on_drag_update(self, gesture, offset_x, offset_y):
         success, start_x, start_y = gesture.get_start_point()
         if success:
             self.update_volume_from_x(start_x + offset_x)
+
+    def on_drag_end(self, gesture, offset_x, offset_y):
+        self.dragging = False
 
     def on_right_click(self, gesture, n_press, x, y):
         self.toggle_mute()
@@ -629,8 +635,22 @@ class VolumeOverlay(Adw.ApplicationWindow):
             GLib.idle_add(self._do_refresh)
         raise pulsectl.PulseLoopStop
 
+    def _any_row_dragging(self):
+        """Return True if any VolumeSliderRow in any tab is being dragged."""
+        for tab_id, lb in self.list_boxes.items():
+            child = lb.get_first_child()
+            while child:
+                if getattr(child, 'dragging', False):
+                    return True
+                child = child.get_next_sibling()
+        return False
+
     def _do_refresh(self):
-        # Called on the main thread; clears the pending flag then refreshes
+        # Called on the main thread; clears the pending flag then refreshes.
+        # Skip rebuild while the user is dragging to avoid destroying the
+        # active gesture widget mid-drag.
+        if self._any_row_dragging():
+            return GLib.SOURCE_REMOVE
         self._refresh_pending = False
         # Fetch server_info once and share across both refresh calls
         try:
