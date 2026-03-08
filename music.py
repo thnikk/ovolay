@@ -4,6 +4,8 @@ gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("Gio", "2.0")
 from gi.repository import Gtk, Gdk, GLib, GdkPixbuf, Gio  # noqa
 
+from widgets import PillSlider
+
 # Priority used when picking a fallback after the active player exits
 _STATUS_PRIORITY = {'Playing': 0, 'Paused': 1, 'Stopped': 2}
 
@@ -65,19 +67,11 @@ class MusicTab(Gtk.Box):
         right.append(text_box)
 
         # Seekbar
-        self._seek_adj = Gtk.Adjustment(
-            value=0, lower=0, upper=1,
-            step_increment=1, page_increment=10)
-        self._seekbar = Gtk.Scale(
-            orientation=Gtk.Orientation.HORIZONTAL,
-            adjustment=self._seek_adj)
-        self._seekbar.set_draw_value(False)
-        self._seekbar.set_hexpand(True)
-        self._seekbar.add_css_class('music-seekbar')
-        self._seekbar.set_focusable(False)
-        # change-value fires on every user-driven drag step; use it to
-        # set the seeking flag and debounce the actual SetPosition call
-        self._seekbar.connect('change-value', self._on_seek_change)
+        self._seek_length = 1  # track length in seconds (updated later)
+        self._seek_pos = 0.0   # current position in seconds
+        self._seekbar = PillSlider(
+            value=0.0, height=8,
+            on_change=self._on_seek_change)
         self._seek_timer_id = None
         right.append(self._seekbar)
 
@@ -110,23 +104,15 @@ class MusicTab(Gtk.Box):
         btns.append(self._next_btn)
         btn_row.set_center_widget(btns)
 
-        # Right: volume scale
+        # Right: volume pill slider
         vol_box = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         vol_box.set_valign(Gtk.Align.CENTER)
-        self._vol_adj = Gtk.Adjustment(
-            value=100, lower=0, upper=100,
-            step_increment=1, page_increment=5)
-        self._vol_scale = Gtk.Scale(
-            orientation=Gtk.Orientation.HORIZONTAL,
-            adjustment=self._vol_adj)
-        self._vol_scale.set_draw_value(False)
-        self._vol_scale.set_hexpand(True)
-        self._vol_scale.set_size_request(80, -1)
+        self._vol_scale = PillSlider(
+            value=1.0, height=8,
+            on_change=self._on_vol_changed,
+            width=80)
         self._vol_scale.set_valign(Gtk.Align.CENTER)
-        self._vol_scale.add_css_class('music-seekbar')
-        self._vol_scale.set_focusable(False)
-        self._vol_scale.connect('value-changed', self._on_vol_changed)
         vol_box.append(self._vol_scale)
 
         btn_row.set_end_widget(vol_box)
@@ -170,10 +156,10 @@ class MusicTab(Gtk.Box):
         proxy = self._proxies.get(self._last_played)
         if proxy is None:
             return
-        current = self._vol_adj.get_value() / 100.0
+        current = self._vol_scale.get_value()
         new_vol = max(0.0, min(1.0, current + delta))
         self._vol_updating = False
-        self._vol_adj.set_value(new_vol * 100)
+        self._vol_scale.set_value(new_vol)
 
     # ------------------------------------------------------------------
     # D-Bus / MPRIS2
@@ -349,7 +335,7 @@ class MusicTab(Gtk.Box):
 
             self._title_lbl.set_text(str(title))
             self._artist_lbl.set_text(str(artist))
-            self._seek_adj.set_upper(max(1, length / 1_000_000))
+            self._seek_length = max(1, length / 1_000_000)
 
             art_url_v = meta.get('mpris:artUrl')
             art_url = (
@@ -372,8 +358,9 @@ class MusicTab(Gtk.Box):
         self._art_url = None
         self._title_lbl.set_text('Nothing playing')
         self._artist_lbl.set_text('')
-        self._seek_adj.set_upper(1)
-        self._seek_adj.set_value(0)
+        self._seek_length = 1
+        self._seek_pos = 0.0
+        self._seekbar.set_value(0.0)
         self._time_lbl.set_text('0:00/0:00')
         self._art.set_paintable(None)
 
@@ -389,11 +376,11 @@ class MusicTab(Gtk.Box):
         self._play_btn.set_child(img)
 
     def _sync_volume_bar(self, proxy):
-        """Read MPRIS2 Volume from proxy and update the scale."""
+        """Read MPRIS2 Volume from proxy and update the pill slider."""
         vol = self._get_prop(proxy, 'Volume', None)
         if vol is not None and isinstance(vol, float):
             self._vol_updating = True
-            self._vol_adj.set_value(vol * 100)
+            self._vol_scale.set_value(max(0.0, min(1.0, vol)))
             self._vol_updating = False
 
     # ------------------------------------------------------------------
@@ -442,13 +429,14 @@ class MusicTab(Gtk.Box):
     # Seekbar
     # ------------------------------------------------------------------
 
-    def _on_seek_change(self, scale, scroll_type, value):
+    def _on_seek_change(self, value):
         """Handle user-driven seekbar movement with debounce."""
         self._seeking = True
         if self._seek_timer_id is not None:
             GLib.source_remove(self._seek_timer_id)
+        # value is normalised [0.0, 1.0]; convert to seconds
         self._seek_timer_id = GLib.timeout_add(
-            150, self._do_seek, value)
+            150, self._do_seek, value * self._seek_length)
 
     def _do_seek(self, value):
         """Send SetPosition to the active player and clear seeking flag."""
@@ -470,20 +458,19 @@ class MusicTab(Gtk.Box):
     # Volume bar
     # ------------------------------------------------------------------
 
-    def _on_vol_changed(self, scale):
-        """Send new volume to the active MPRIS2 player."""
+    def _on_vol_changed(self, value):
+        """Send new volume (0.0–1.0) to the active MPRIS2 player."""
         if self._vol_updating:
             return
         proxy = self._proxies.get(self._last_played)
         if proxy is None:
             return
-        vol = self._vol_adj.get_value() / 100.0
         proxy.call(
             'org.freedesktop.DBus.Properties.Set',
             GLib.Variant('(ssv)', (
                 'org.mpris.MediaPlayer2.Player',
                 'Volume',
-                GLib.Variant('d', vol),
+                GLib.Variant('d', value),
             )),
             Gio.DBusCallFlags.NONE, -1, None, None, None)
 
@@ -508,10 +495,12 @@ class MusicTab(Gtk.Box):
                         'org.mpris.MediaPlayer2.Player', 'Position')),
                     Gio.DBusCallFlags.NONE, -1, None)
                 pos = pos_v.unpack()[0] / 1_000_000
-                self._seek_adj.set_value(pos)
-                total = self._seek_adj.get_upper()
+                self._seek_pos = pos
+                if self._seek_length > 0:
+                    self._seekbar.set_value(pos / self._seek_length)
                 self._time_lbl.set_text(
-                    f'{self._fmt_time(pos)}/{self._fmt_time(total)}'
+                    f'{self._fmt_time(pos)}'
+                    f'/{self._fmt_time(self._seek_length)}'
                 )
                 status = self._get_prop(
                     proxy, 'PlaybackStatus', 'Stopped')

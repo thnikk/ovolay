@@ -386,3 +386,132 @@ class VolumeSliderRow(Gtk.Box):
     def set_is_default(self, value):
         """Show or hide the default device indicator."""
         self.default_icon.set_visible(bool(value))
+
+
+class PillSlider(Gtk.DrawingArea):
+    """Horizontal pill-shaped slider with no visible handle.
+
+    Visually resembles a level bar: a fully-rounded trough with a
+    rounded filled region that grows from the left. Supports click
+    and drag to set position. Value range is always 0.0–1.0.
+    """
+
+    def __init__(
+            self, value=0.0, height=8,
+            on_change=None, width=-1,
+            scroll_step=0.05, scroll_to_adjust=True):
+        super().__init__()
+        # Current normalised value [0.0, 1.0]
+        self._value = max(0.0, min(1.0, value))
+        self._on_change = on_change
+        self._height = height
+        self._scroll_step = scroll_step
+
+        self.set_draw_func(self._draw)
+        self.set_size_request(width, height)
+        self.set_hexpand(width == -1)
+        self.set_valign(Gtk.Align.CENTER)
+        self.set_focusable(False)
+
+        # Click to set position
+        click = Gtk.GestureClick.new()
+        click.set_button(1)
+        click.connect('pressed', self._on_press)
+        self.add_controller(click)
+
+        # Drag to adjust
+        drag = Gtk.GestureDrag.new()
+        drag.set_button(1)
+        drag.connect('drag-begin', self._on_drag_begin)
+        drag.connect('drag-update', self._on_drag_update)
+        self.add_controller(drag)
+
+        # Optional vertical scroll to adjust value
+        if scroll_to_adjust:
+            scroll = Gtk.EventControllerScroll.new(
+                Gtk.EventControllerScrollFlags.VERTICAL)
+            scroll.connect('scroll', self._on_scroll)
+            self.add_controller(scroll)
+
+    def get_value(self):
+        """Return the current value in [0.0, 1.0]."""
+        return self._value
+
+    def set_value(self, value):
+        """Set value (0.0–1.0) and redraw; does not fire on_change."""
+        self._value = max(0.0, min(1.0, value))
+        self.queue_draw()
+
+    def _set_from_x(self, x):
+        """Update value from an x pixel coordinate and fire callback."""
+        w = self.get_width()
+        if w <= 0:
+            return
+        new_val = max(0.0, min(1.0, x / w))
+        if new_val == self._value:
+            return
+        self._value = new_val
+        self.queue_draw()
+        if self._on_change:
+            self._on_change(self._value)
+
+    def _on_scroll(self, _controller, _dx, dy):
+        """Adjust value by scroll_step on vertical scroll."""
+        self._value = max(0.0, min(1.0, self._value - dy * self._scroll_step))
+        self.queue_draw()
+        if self._on_change:
+            self._on_change(self._value)
+        return True
+
+    def _on_press(self, gesture, _n, x, _y):
+        self._set_from_x(x)
+
+    def _on_drag_begin(self, gesture, x, _y):
+        self._set_from_x(x)
+
+    def _on_drag_update(self, gesture, dx, _dy):
+        ok, start_x, _ = gesture.get_start_point()
+        if ok:
+            self._set_from_x(start_x + dx)
+
+    def _draw(self, _area, cr, width, height, *_args):
+        """Paint trough and filled highlight as rounded pills."""
+        r = height / 2.0
+        fill_w = width * self._value
+
+        # Retrieve theme colours via a StyleContext snapshot
+        style = self.get_style_context()
+        fg = style.get_color()
+        tr, tg, tb = fg.red, fg.green, fg.blue
+
+        # Trough (full width, low opacity)
+        cr.save()
+        self._pill(cr, 0, 0, width, height, r)
+        cr.set_source_rgba(tr, tg, tb, 0.15)
+        cr.fill()
+        cr.restore()
+
+        # Filled region (accent colour from CSS variable if available)
+        if fill_w > 0:
+            cr.save()
+            # Clip to a pill the width of the fill so the right edge
+            # stays rounded even when partially filled
+            clip_w = max(fill_w, height)
+            self._pill(cr, 0, 0, clip_w, height, r)
+            cr.clip()
+            # Draw a full-width pill and let the clip cut the right side
+            self._pill(cr, 0, 0, width, height, r)
+            cr.set_source_rgba(tr, tg, tb, 0.7)
+            cr.fill()
+            cr.restore()
+
+    @staticmethod
+    def _pill(cr, x, y, w, h, r):
+        """Trace a fully-rounded pill path."""
+        r = min(r, w / 2.0, h / 2.0)
+        cr.new_sub_path()
+        cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+        cr.arc(x + w - r, y + r, r, 3 * math.pi / 2, 2 * math.pi)
+        cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+        cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+        cr.close_path()
