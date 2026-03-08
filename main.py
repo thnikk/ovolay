@@ -7,7 +7,10 @@ import os
 # This keeps the trigger path (ovolay with no args) near-instant.
 _runtime_dir = os.environ.get('XDG_RUNTIME_DIR', '/tmp')
 _pid_file = os.path.join(_runtime_dir, 'ovolay.pid')
-if '--daemon' not in sys.argv:
+_help_flags = {'-h', '--help'}
+if ('--daemon' not in sys.argv
+        and '-d' not in sys.argv
+        and not _help_flags.intersection(sys.argv)):
     try:
         with open(_pid_file) as _fh:
             _pid = int(_fh.read().strip())
@@ -176,13 +179,13 @@ def parse_args() -> argparse.Namespace:
         '--screenshot', metavar='PATH',
         help=argparse.SUPPRESS)
     parser.add_argument(
-        '--window', action='store_true',
+        '-w', '--window', action='store_true',
         help='run as a regular window without layer shell')
     parser.add_argument(
-        '--player', metavar='NAME', default=None,
+        '-p', '--player', metavar='NAME', default=None,
         help='MPRIS2 player name to use (default: first found)')
     parser.add_argument(
-        '--daemon', action='store_true',
+        '-d', '--daemon', action='store_true',
         help='run as a foreground daemon; show window on SIGUSR1')
     parser.set_defaults(daemonized=False)
     return parser.parse_args()
