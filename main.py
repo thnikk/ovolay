@@ -179,7 +179,7 @@ def parse_args() -> argparse.Namespace:
         '--screenshot', metavar='PATH',
         help=argparse.SUPPRESS)
     parser.add_argument(
-        '-w', '--window', action='store_true',
+        '-W', '--window', action='store_true',
         help='run as a regular window without layer shell')
     parser.add_argument(
         '-p', '--player', metavar='NAME', default=None,
