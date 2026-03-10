@@ -158,8 +158,10 @@ class MusicTab(Gtk.Box):
             return
         current = self._vol_scale.get_value()
         new_vol = max(0.0, min(1.0, current + delta))
-        self._vol_updating = False
         self._vol_scale.set_value(new_vol)
+        # Send the change to the player directly; _on_vol_changed is
+        # skipped by set_value so we call it here explicitly.
+        self._on_vol_changed(new_vol)
 
     # ------------------------------------------------------------------
     # D-Bus / MPRIS2
