@@ -9,15 +9,38 @@ from pathlib import Path
 _runtime_dir = os.environ.get('XDG_RUNTIME_DIR', '/tmp')
 _pid_file = os.path.join(_runtime_dir, 'ovolay.pid')
 _help_flags = {'-h', '--help'}
+_replace_flags = {'-r', '--replace'}
+_replacing = bool(_replace_flags.intersection(sys.argv))
 if ('--daemon' not in sys.argv
         and '-d' not in sys.argv
-        and not _help_flags.intersection(sys.argv)):
+        and not _help_flags.intersection(sys.argv)
+        and not _replacing):
     try:
         with open(_pid_file) as _fh:
             _pid = int(_fh.read().strip())
         os.kill(_pid, signal.SIGUSR1)
         sys.exit(0)
     except (FileNotFoundError, ValueError, ProcessLookupError):
+        pass
+
+if _replacing:
+    # Kill the running instance before launching the new one
+    try:
+        with open(_pid_file) as _fh:
+            _pid = int(_fh.read().strip())
+        os.kill(_pid, signal.SIGTERM)
+        # Wait briefly for the process to exit and clear the PID file
+        import time as _time
+        for _ in range(20):
+            _time.sleep(0.05)
+            if not os.path.exists(_pid_file):
+                break
+    except (FileNotFoundError, ValueError, ProcessLookupError):
+        pass
+    # Remove a stale PID file if the process did not clean it up
+    try:
+        os.unlink(_pid_file)
+    except FileNotFoundError:
         pass
 
 from ctypes import CDLL
@@ -94,6 +117,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '-p', '--player', metavar='NAME', default=None,
         help='MPRIS2 player name to use (default: first found)')
+    parser.add_argument(
+        '-r', '--replace', action='store_true',
+        help='replace the running instance')
     parser.add_argument(
         '-d', '--daemon', action='store_true',
         help='run as a foreground daemon; show window on SIGUSR1')
