@@ -1,6 +1,8 @@
 .overlay-window {
     font-family: Nunito;
-    background-color: alpha(#1c1f26, 0.9);
+    /* background-color: alpha(#1c1f26, 0.9); */
+    background-color: #1c1f26;
+    opacity: 0.9;
     color: #d8dee9;
     border-radius: 30px;
     border: 1px solid @borders;
