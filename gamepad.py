@@ -67,9 +67,12 @@ class GamepadListener:
         self._cb = callbacks
         # Track which buttons are currently held {keycode: bool}
         self._held = {}
-        # Active reader threads keyed by device path
-        self._readers = {}
+        # Active devices keyed by device path {path: InputDevice}
+        self._devices = {}
         self._lock = threading.Lock()
+        # Whether the window is currently visible
+        self._grabbed = False
+        self._visible = False
         # d-pad repeat state
         self._repeat_thread = None
         self._repeat_action = None
@@ -131,7 +134,7 @@ class GamepadListener:
         """Fallback: rescan /dev/input every 2 s for new gamepads."""
         while True:
             time.sleep(2)
-            known = set(self._readers.keys())
+            known = set(self._devices.keys())
             for path in evdev.list_devices():
                 if path in known:
                     continue
@@ -148,14 +151,42 @@ class GamepadListener:
     # Per-device reader
     # ------------------------------------------------------------------
 
+    def grab(self):
+        """Exclusively grab all active devices."""
+        with self._lock:
+            self._grabbed = True
+            self._visible = True
+            for dev in self._devices.values():
+                try:
+                    dev.grab()
+                except Exception:
+                    pass
+
+    def ungrab(self):
+        """Release exclusive grab on all active devices."""
+        with self._lock:
+            self._grabbed = False
+            self._visible = False
+            for dev in self._devices.values():
+                try:
+                    dev.ungrab()
+                except Exception:
+                    pass
+
     def _start_reader(self, device):
         """Spawn a daemon thread to read events from device."""
         path = device.path
         with self._lock:
-            if path in self._readers:
+            if path in self._devices:
                 device.close()
                 return
-            self._readers[path] = True
+            self._devices[path] = device
+            # Grab immediately if the window is already visible
+            if self._grabbed:
+                try:
+                    device.grab()
+                except Exception:
+                    pass
         t = threading.Thread(
             target=self._read_loop,
             args=(device,),
@@ -177,7 +208,7 @@ class GamepadListener:
             print(f'gamepad: disconnected {path}')
             device.close()
             with self._lock:
-                self._readers.pop(path, None)
+                self._devices.pop(path, None)
 
     # ------------------------------------------------------------------
     # Event handling
@@ -204,11 +235,19 @@ class GamepadListener:
         if not pressed:
             return
 
-        # --- Combo: BTN_MODE + BTN_SELECT -> open ---
+        # --- Combo: BTN_MODE + BTN_SELECT -> open (always active) ---
         if code in (_BTN_MODE, _BTN_SELECT):
             if (self._held.get(_BTN_MODE)
                     and self._held.get(_BTN_SELECT)):
+                # Clear held state before dispatching; the grab means
+                # release events for these keys won't be delivered.
+                self._held[_BTN_MODE] = False
+                self._held[_BTN_SELECT] = False
                 self._dispatch('open')
+            return
+
+        # All other binds only active while the window is visible
+        if not self._visible:
             return
 
         # --- Shoulder buttons: cycle tabs ---
@@ -232,6 +271,9 @@ class GamepadListener:
 
     def _handle_abs(self, code, value):
         """Handle hat/d-pad axis events with key-repeat."""
+        # D-pad navigation only active while the window is visible
+        if not self._visible:
+            return
         if code == _ABS_HAT0Y:
             if value == -1:
                 self._start_repeat('nav_up')

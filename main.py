@@ -401,7 +401,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
             'south': _south,
             'hide': self._dismiss,
         }
-        GamepadListener(callbacks)
+        self._gamepad = GamepadListener(callbacks)
+        # Grab devices while the window is visible
+        self.connect('show', lambda _: self._gamepad.grab())
+        self.connect('hide', lambda _: self._gamepad.ungrab())
 
     def _dismiss(self):
         """Hide the window; in daemon mode keep it alive for reuse."""
