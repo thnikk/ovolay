@@ -66,6 +66,7 @@ from gi.repository import (  # noqa
     Gtk, Gdk, Adw, Gtk4LayerShell, GLib, Gsk, Graphene, GdkPixbuf, Gio
 )
 
+from gamepad import GamepadListener  # noqa
 from music import MusicTab  # noqa
 from widgets import VScrollGradientBox, VolumeSliderRow  # noqa
 
@@ -117,6 +118,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '-p', '--player', metavar='NAME', default=None,
         help='MPRIS2 player name to use (default: first found)')
+    parser.add_argument(
+        '-g', '--gamepad', action='store_true',
+        help='listen for gamepad input via evdev')
     parser.add_argument(
         '-r', '--replace', action='store_true',
         help='replace the running instance')
@@ -330,9 +334,74 @@ class VolumeOverlay(Adw.ApplicationWindow):
         # Switch to the requested startup tab
         self.view_stack.set_visible_child_name(self.args.tab)
 
+        # Start gamepad listener if requested
+        if self.args.gamepad:
+            self._start_gamepad_listener()
+
         # Schedule screenshot capture after first paint if requested
         if self.args.screenshot:
             GLib.idle_add(self._do_screenshot)
+
+    def _start_gamepad_listener(self):
+        """Build callback map and start the GamepadListener thread."""
+        # Actions differ by current tab; closures capture self.
+        def _nav_up():
+            if self.current_tab == 'music':
+                self.music_tab.adjust_volume(0.05)
+            else:
+                self.move_selection(-1)
+
+        def _nav_down():
+            if self.current_tab == 'music':
+                self.music_tab.adjust_volume(-0.05)
+            else:
+                self.move_selection(1)
+
+        def _nav_left():
+            if self.current_tab == 'music':
+                self.music_tab.cmd_prev()
+            else:
+                self.adjust_selected_volume(-5)
+
+        def _nav_right():
+            if self.current_tab == 'music':
+                self.music_tab.cmd_next()
+            else:
+                self.adjust_selected_volume(5)
+
+        def _south():
+            if self.current_tab == 'music':
+                self.music_tab._cmd_play_pause()
+            else:
+                self.set_selected_as_default()
+
+        def _mute():
+            self.toggle_selected_mute()
+
+        def _open():
+            # Show/present; only meaningful in daemon mode
+            if self.args.daemonized:
+                if not self.get_visible():
+                    Gtk4LayerShell.set_keyboard_mode(
+                        self,
+                        Gtk4LayerShell.KeyboardMode.EXCLUSIVE,
+                    )
+                    self.set_visible(True)
+                self.present()
+
+        callbacks = {
+            'open': _open,
+            'nav_up': _nav_up,
+            'nav_down': _nav_down,
+            'nav_left': _nav_left,
+            'nav_right': _nav_right,
+            'tab_prev': lambda: self.switch_tab(-1),
+            'tab_next': lambda: self.switch_tab(1),
+            'mute': _mute,
+            'south': _south,
+            'hide': self._dismiss,
+        }
+        GamepadListener(callbacks)
 
     def _dismiss(self):
         """Hide the window; in daemon mode keep it alive for reuse."""
