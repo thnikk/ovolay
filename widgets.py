@@ -321,6 +321,13 @@ class VolumeSliderRow(Gtk.Box):
         self.right_click_gesture.connect("pressed", self.on_right_click)
         self.add_controller(self.right_click_gesture)
 
+        # Middle-click to set as default device
+        self.middle_click_gesture = Gtk.GestureClick.new()
+        self.middle_click_gesture.set_button(2)
+        self.middle_click_gesture.connect(
+            "pressed", self.on_middle_click)
+        self.add_controller(self.middle_click_gesture)
+
         self.update_ui()
 
     def update_volume_from_x(self, x):
@@ -343,6 +350,11 @@ class VolumeSliderRow(Gtk.Box):
 
     def on_right_click(self, gesture, n_press, x, y):
         self.toggle_mute()
+
+    def on_middle_click(self, gesture, n_press, x, y):
+        """Set this device as the default on middle-click."""
+        if self.set_default_cb:
+            self.set_default_cb(self.index)
 
     def on_scroll(self, controller, dx, dy):
         if not self.scroll_to_adjust:
