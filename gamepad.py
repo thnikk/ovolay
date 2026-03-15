@@ -158,6 +158,13 @@ class GamepadListener:
             self._visible = True
             for dev in self._devices.values():
                 try:
+                    # Before grabbing, tell the OS that any currently held
+                    # buttons are released. Otherwise, since the grab
+                    # prevents the release event from reaching the OS, it
+                    # will think they are stuck down.
+                    for code in dev.active_keys():
+                        dev.write(ecodes.EV_KEY, code, 0)
+                    dev.syn()
                     dev.grab()
                 except Exception:
                     pass
@@ -184,6 +191,9 @@ class GamepadListener:
             # Grab immediately if the window is already visible
             if self._grabbed:
                 try:
+                    for code in device.active_keys():
+                        device.write(ecodes.EV_KEY, code, 0)
+                    device.syn()
                     device.grab()
                 except Exception:
                     pass
