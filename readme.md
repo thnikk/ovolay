@@ -32,3 +32,5 @@ These shortcuts are universal, regardless of the selected mode.
 | Tab           | Next tab                       |
 | Shift + Tab   | Previous tab                   |
 | 1-3           | Switch to specific tab         |
+
+Run with `-G` / `--group` to group sink inputs (e.g. browser tabs) into a single row per application binary.

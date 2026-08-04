@@ -46,6 +46,7 @@ if _replacing:
 from ctypes import CDLL
 import threading
 import argparse
+from collections import defaultdict
 import pulsectl
 
 # Pre-load the layer shell library
@@ -130,6 +131,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '-l', '--limit-height', action='store_true',
         help='limit tab height to ~3 visible items using scroll boxes')
+    parser.add_argument(
+        '-G', '--group', action='store_true',
+        help='group sink inputs by application binary')
     parser.set_defaults(daemonized=False)
     return parser.parse_args()
 
@@ -455,6 +459,32 @@ class VolumeOverlay(Adw.ApplicationWindow):
             self.pulse.sink_input_list, index,
             lambda obj: self.pulse.mute(obj, muted))
 
+    @staticmethod
+    def _sink_key(si):
+        """Return the grouping key used to combine sink inputs by binary."""
+        return (si.proplist.get('application.process.binary')
+                or si.proplist.get('application.binary')
+                or si.proplist.get('application.name')
+                or 'Unknown Application')
+
+    def _set_group_volume(self, key, volume):
+        """Apply volume to every sink input of the given binary group."""
+        try:
+            for obj in self.pulse.sink_input_list():
+                if self._sink_key(obj) == key:
+                    self.pulse.volume_set_all_chans(obj, volume)
+        except pulsectl.PulseError:
+            pass
+
+    def _set_group_mute(self, key, muted):
+        """Apply mute to every sink input of the given binary group."""
+        try:
+            for obj in self.pulse.sink_input_list():
+                if self._sink_key(obj) == key:
+                    self.pulse.mute(obj, muted)
+        except pulsectl.PulseError:
+            pass
+
     def _set_output_volume(self, index, volume):
         self._lookup_and_call(
             self.pulse.sink_list, index,
@@ -576,15 +606,7 @@ class VolumeOverlay(Adw.ApplicationWindow):
                 lb.append(Gtk.Label(label="No applications"))
                 self.selected_indices['apps'] = 0
                 return
-            for si in sorted(items, key=lambda x: x.index):
-                title = si.proplist.get(
-                    'application.name', 'Unknown Application')
-                subtitle = si.proplist.get('media.name')
-                row = VolumeSliderRow(
-                    title, subtitle, si.index, _vol_pct(si),
-                    bool(si.mute),
-                    self._set_app_volume, self._set_app_mute,
-                    scroll_to_adjust=not self.args.limit_height)
+            for row in self._build_app_rows(items):
                 lb.append(row)
             # Clamp to keep position when items are removed
             current = self.selected_indices['apps']
@@ -594,6 +616,57 @@ class VolumeOverlay(Adw.ApplicationWindow):
                 self.update_selection_visuals()
         except pulsectl.PulseError:
             pass
+
+    def _build_app_rows(self, items):
+        """Build VolumeSliderRow widgets for the given sink inputs.
+
+        With --group, sink inputs are collapsed by application binary so
+        each binary gets a single row controlling all of its streams.
+        """
+        if not self.args.group:
+            rows = []
+            for si in sorted(items, key=lambda x: x.index):
+                title = si.proplist.get(
+                    'application.name', 'Unknown Application')
+                subtitle = si.proplist.get('media.name')
+                rows.append(VolumeSliderRow(
+                    title, subtitle, si.index, _vol_pct(si),
+                    bool(si.mute),
+                    self._set_app_volume, self._set_app_mute,
+                    scroll_to_adjust=not self.args.limit_height))
+            return rows
+
+        groups = defaultdict(list)
+        for si in items:
+            groups[self._sink_key(si)].append(si)
+        rows = []
+        for key in sorted(
+                groups, key=lambda k: min(si.index for si in groups[k])):
+            sis = groups[key]
+            name = next(
+                (si.proplist.get('application.name')
+                 for si in sis if si.proplist.get('application.name')),
+                key)
+            binary = next(
+                (si.proplist.get('application.process.binary')
+                 or si.proplist.get('application.binary')
+                 for si in sis
+                 if (si.proplist.get('application.process.binary')
+                     or si.proplist.get('application.binary'))),
+                None)
+            title = (
+                f"{name} ({binary})" if binary and binary != name
+                else name)
+            volume = int(sum(_vol_pct(si) for si in sis) / len(sis))
+            muted = any(si.mute for si in sis)
+            subtitle = (
+                f"{len(sis)} streams" if len(sis) > 1
+                else sis[0].proplist.get('media.name'))
+            rows.append(VolumeSliderRow(
+                title, subtitle, key, volume, muted,
+                self._set_group_volume, self._set_group_mute,
+                scroll_to_adjust=not self.args.limit_height))
+        return rows
 
     def refresh_outputs(self, server_info=None):
         """Rebuild the Outputs list if the set of sinks or default changed."""
