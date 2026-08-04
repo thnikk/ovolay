@@ -23,7 +23,7 @@ a = Analysis(
             },
         },
     },
-    runtime_hooks=[],
+    runtime_hooks=['ovolay_rthook.py'],
     excludes=[],
     noarchive=False,
     optimize=2,
