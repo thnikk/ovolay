@@ -46,6 +46,7 @@ if _replacing:
 from ctypes import CDLL
 import threading
 import argparse
+import time
 from collections import defaultdict
 import pulsectl
 
@@ -520,20 +521,24 @@ class VolumeOverlay(Adw.ApplicationWindow):
     # ------------------------------------------------------------------
 
     def _start_event_listener(self):
-        # Watch for sink, source, and sink-input events in a daemon thread
+        # Watch for sink, source, and sink-input events in a daemon thread.
+        # Reconnect on any failure so a dropped connection (e.g. Pulse
+        # daemon restart) does not silently kill the listener.
         def listen():
-            try:
-                with pulsectl.Pulse('ovolay-events') as pulse:
-                    pulse.event_mask_set(
-                        'sink_input', 'sink', 'source', 'server')
-                    pulse.event_callback_set(self._on_pulse_event)
-                    while True:
-                        try:
-                            pulse.event_listen(timeout=1)
-                        except pulsectl.PulseLoopStop:
-                            pass
-            except Exception:
-                pass
+            while True:
+                try:
+                    with pulsectl.Pulse('ovolay-events') as pulse:
+                        pulse.event_mask_set(
+                            'sink_input', 'sink', 'source', 'server')
+                        pulse.event_callback_set(self._on_pulse_event)
+                        while True:
+                            try:
+                                pulse.event_listen(timeout=1)
+                            except pulsectl.PulseLoopStop:
+                                pass
+                except Exception:
+                    pass
+                time.sleep(1)
         threading.Thread(target=listen, daemon=True).start()
 
     def _on_pulse_event(self, ev):
@@ -558,6 +563,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
         # Skip rebuild while the user is dragging to avoid destroying the
         # active gesture widget mid-drag.
         if self._any_row_dragging():
+            # Dragging fires a burst of Pulse events, all deduped against the
+            # pending flag. Retry shortly so the refresh is not abandoned once
+            # the gesture ends, even if no further event arrives.
+            GLib.timeout_add(100, self._do_refresh)
             return GLib.SOURCE_REMOVE
         self._refresh_pending = False
         # Fetch server_info once and share across both refresh calls
