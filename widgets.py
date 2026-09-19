@@ -408,13 +408,20 @@ class SongRow(Gtk.Box):
     styling. Holds the raw song dict from the server for playback.
     """
 
-    def __init__(self, song, title, subtitle=None):
+    def __init__(self, song, title, subtitle=None, on_click=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.song = song
         self.is_selected_item = False
+        self.on_click = on_click
 
         self.add_css_class("volume-row")
         self.set_hexpand(True)
+
+        # Left-click selects the row immediately
+        click = Gtk.GestureClick.new()
+        click.set_button(1)
+        click.connect("pressed", self._on_pressed)
+        self.add_controller(click)
 
         content_box = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
@@ -444,6 +451,10 @@ class SongRow(Gtk.Box):
 
         content_box.append(title_box)
         self.append(content_box)
+
+    def _on_pressed(self, gesture, n_press, x, y):
+        if self.on_click:
+            self.on_click(self)
 
     def set_selected(self, selected):
         self.is_selected_item = selected

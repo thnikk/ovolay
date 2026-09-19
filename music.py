@@ -724,7 +724,9 @@ class FeishinMusicTab(Gtk.Box):
         self._track_id = song.get('id')
         self._title_lbl.set_text(str(song.get('name', 'Unknown')))
         self._artist_lbl.set_text(str(song.get('artistName', '')))
-        self._seek_length = max(1, int(song.get('duration', 0) or 0))
+        # Feishin reports duration in milliseconds; everything else here
+        # (position, seek values, fmt_time) works in seconds
+        self._seek_length = max(1, int(song.get('duration', 0) or 0) / 1000.0)
         if changed and self._client:
             self._client.request_artwork()
 

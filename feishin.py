@@ -66,6 +66,9 @@ class FeishinClient:
         # requestId of the most recent tracks-request, used to filter
         # stale responses if the user types faster than the server answers
         self._search_request_id = None
+        # Last known playback status ('playing'/'paused'/'stopped'),
+        # populated from the state/playback events
+        self.status = None
 
     def ws_url(self):
         """Websocket URL for the remote server."""
@@ -103,7 +106,7 @@ class FeishinClient:
 
     def toggle_play(self):
         """Toggle play/pause based on the last known status."""
-        playing = self.state.get('status') == 'playing'
+        playing = self.status == 'playing'
         self.send_event('pause' if playing else 'play')
 
     def next_track(self):
@@ -172,6 +175,10 @@ class FeishinClient:
             # Ignore responses for searches that have since been superseded
             if data.get('requestId') != self._search_request_id:
                 return
+        if event == EVENT_STATE:
+            self.status = data.get('status', self.status)
+        elif event == EVENT_PLAYBACK:
+            self.status = data
         self.state[event] = data
         self._emit(event, data)
 
@@ -215,6 +222,7 @@ class FeishinClient:
                 print(f'feishin client connection error: {e}')
             self._ws = None
             self.state = {}
+            self.status = None
             if self._stop.is_set():
                 break
             self._stop.wait(RECONNECT_DELAY)

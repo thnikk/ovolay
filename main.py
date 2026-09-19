@@ -399,6 +399,9 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.view_stack.connect(
             "notify::visible-child-name", self.on_tab_changed)
 
+        # Clear the search whenever the window is hidden
+        self.connect("hide", lambda w: self._reset_search())
+
         self.main_box.append(tab_row)
         self.main_box.append(self.view_stack)
         self.set_content(self.main_box)
@@ -869,6 +872,13 @@ class VolumeOverlay(Adw.ApplicationWindow):
             self.refresh_search_results([])
         return GLib.SOURCE_REMOVE
 
+    def _reset_search(self):
+        """Clear the search entry and results when the window is hidden."""
+        if not self.args.feishin:
+            return
+        self.search_entry.set_text('')
+        self.refresh_search_results([])
+
     def _on_feishin_update(self, event, data):
         """Route a Feishin client update onto the music/search/queue tabs."""
         if not self.args.feishin:
@@ -896,7 +906,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.selected_indices['search'] = 0
         for song in songs:
             title, subtitle = self._song_row_text(song)
-            lb.append(SongRow(song, title, subtitle))
+            lb.append(SongRow(song, title, subtitle,
+                              on_click=self._on_song_row_clicked))
         if self.current_tab == 'search':
             self.update_selection_visuals()
 
@@ -907,9 +918,31 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.selected_indices['queue'] = 0
         for song in songs:
             title, subtitle = self._song_row_text(song)
-            lb.append(SongRow(song, title, subtitle))
+            lb.append(SongRow(song, title, subtitle,
+                              on_click=self._on_song_row_clicked))
         if self.current_tab == 'queue':
             self.update_selection_visuals()
+
+    def _on_song_row_clicked(self, row):
+        """Select and play the clicked search/queue row."""
+        tab = self.current_tab
+        if tab not in ('search', 'queue'):
+            return
+        lb = self.list_boxes[tab]
+        index = 0
+        child = lb.get_first_child()
+        while child:
+            if child is row:
+                self.selected_indices[tab] = index
+                self.update_selection_visuals()
+                self._scroll_to_selected()
+                if tab == 'search':
+                    self.play_selected_song()
+                else:
+                    self.play_selected_queue_item()
+                return
+            child = child.get_next_sibling()
+            index += 1
 
     def play_selected_song(self):
         """Play the selected Search tab result."""
