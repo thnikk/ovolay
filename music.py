@@ -1,3 +1,5 @@
+import base64
+
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
@@ -537,3 +539,289 @@ class MusicTab(Gtk.Box):
 
     def _cmd_next(self):
         self._call('Next')
+
+
+class FeishinMusicTab(Gtk.Box):
+    """Feishin remote media controls with album art.
+
+    Layout mirrors MusicTab but every value is driven by the Feishin
+    remote WebSocket instead of MPRIS/D-Bus. Shared as the Music tab
+    when the overlay runs in feishin mode (-f).
+    """
+
+    ART_SIZE = 200
+
+    def __init__(self, client):
+        super().__init__(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=15)
+        self.set_valign(Gtk.Align.CENTER)
+        self._client = client
+        self._song = None
+        self._track_id = None
+        self._seek_length = 1
+        self._seek_pos = 0.0
+        self._seeking = False
+        self._seek_timer_id = None
+        # Guard flag to avoid feedback loop when updating the volume bar
+        self._vol_updating = False
+
+        # Album art displayed with Gtk.Picture (avoids Cairo/pycairo)
+        self._art = Gtk.Picture()
+        self._art.set_size_request(self.ART_SIZE, self.ART_SIZE)
+        self._art.set_valign(Gtk.Align.CENTER)
+        self._art.set_can_shrink(True)
+        self._art.set_content_fit(Gtk.ContentFit.COVER)
+        self._art.add_css_class('music-art')
+        self.append(self._art)
+
+        # Right panel: title, artist, seekbar, buttons
+        right = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        right.set_hexpand(True)
+
+        text_box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        text_box.set_vexpand(True)
+
+        self._title_lbl = Gtk.Label(label='Nothing playing')
+        self._title_lbl.set_halign(Gtk.Align.START)
+        self._title_lbl.set_ellipsize(3)
+        self._title_lbl.add_css_class('song-label')
+        text_box.append(self._title_lbl)
+
+        self._artist_lbl = Gtk.Label(label='')
+        self._artist_lbl.set_halign(Gtk.Align.START)
+        self._artist_lbl.set_ellipsize(3)
+        self._artist_lbl.add_css_class('artist-label')
+        text_box.append(self._artist_lbl)
+
+        right.append(text_box)
+
+        # Seekbar
+        self._seekbar = PillSlider(
+            value=0.0, height=8,
+            on_change=self._on_seek_change)
+        right.append(self._seekbar)
+
+        # Bottom row: time | buttons | volume
+        btn_row = Gtk.CenterBox()
+        btn_row.set_valign(Gtk.Align.CENTER)
+
+        # Left: elapsed/total time display
+        self._time_lbl = Gtk.Label(label='0:00/0:00')
+        self._time_lbl.set_valign(Gtk.Align.CENTER)
+        self._time_lbl.set_halign(Gtk.Align.CENTER)
+        self._time_lbl.set_hexpand(True)
+        self._time_lbl.add_css_class('music-time')
+        btn_row.set_start_widget(self._time_lbl)
+
+        # Center: prev / play / next
+        btns = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        btns.set_valign(Gtk.Align.CENTER)
+        self._prev_btn = self._make_btn(
+            'media-skip-backward-symbolic', self.cmd_prev)
+        self._play_btn = self._make_btn(
+            'media-playback-start-symbolic',
+            self._cmd_play_pause, icon_size=24)
+        self._next_btn = self._make_btn(
+            'media-skip-forward-symbolic', self.cmd_next)
+        btns.append(self._prev_btn)
+        btns.append(self._play_btn)
+        btns.append(self._next_btn)
+        btn_row.set_center_widget(btns)
+
+        # Right: volume pill slider
+        vol_box = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        vol_box.set_valign(Gtk.Align.CENTER)
+        self._vol_scale = PillSlider(
+            value=1.0, height=8,
+            on_change=self._on_vol_changed,
+            width=80)
+        self._vol_scale.set_valign(Gtk.Align.CENTER)
+        vol_box.append(self._vol_scale)
+
+        btn_row.set_end_widget(vol_box)
+        right.append(btn_row)
+
+        self.append(right)
+
+    def _make_btn(self, icon, callback, icon_size=16):
+        """Create a circular icon button with optional icon size."""
+        btn = Gtk.Button()
+        img = Gtk.Image.new_from_icon_name(icon)
+        img.set_pixel_size(icon_size)
+        btn.set_child(img)
+        btn.add_css_class('music-button')
+        btn.set_focusable(False)
+        btn.set_valign(Gtk.Align.CENTER)
+        btn.set_halign(Gtk.Align.CENTER)
+        size = icon_size + 24
+        btn.set_size_request(size, size)
+        btn.connect('clicked', lambda b: callback())
+        return btn
+
+    # ------------------------------------------------------------------
+    # Public keybind interface (called from VolumeOverlay)
+    # ------------------------------------------------------------------
+
+    def cmd_prev(self):
+        """Skip to the previous track."""
+        self._client.prev_track()
+
+    def cmd_next(self):
+        """Skip to the next track."""
+        self._client.next_track()
+
+    def _cmd_play_pause(self):
+        """Toggle play/pause on the remote player."""
+        self._client.toggle_play()
+
+    def adjust_volume(self, delta):
+        """Adjust remote volume by delta (fraction, e.g. 0.05)."""
+        current = self._vol_scale.get_value()
+        new_vol = max(0.0, min(1.0, current + delta))
+        self._vol_scale.set_value(new_vol)
+        # set_value skips on_change, so forward it explicitly
+        self._on_vol_changed(new_vol)
+
+    # ------------------------------------------------------------------
+    # State updates (called from VolumeOverlay._on_feishin_update)
+    # ------------------------------------------------------------------
+
+    def update(self, event, data):
+        """Apply one Feishin server update to the UI."""
+        if event == 'state':
+            song = data.get('song')
+            self._set_song(song)
+            if data.get('position') is not None:
+                self._set_position(data['position'])
+            if data.get('status') is not None:
+                self._set_status(data['status'])
+            if data.get('volume') is not None:
+                self._set_volume(data['volume'])
+        elif event == 'song':
+            self._set_song(data)
+        elif event == 'playback':
+            self._set_status(data)
+        elif event == 'position':
+            self._set_position(data)
+        elif event == 'volume':
+            self._set_volume(data)
+        elif event == 'proxy':
+            self._set_art(data)
+
+    def _set_song(self, song):
+        """Show a new song (dict or None) and fetch its artwork."""
+        if not song:
+            if self._song is not None:
+                self._clear_ui()
+            self._song = None
+            return
+        changed = song.get('id') != self._track_id
+        self._song = song
+        self._track_id = song.get('id')
+        self._title_lbl.set_text(str(song.get('name', 'Unknown')))
+        self._artist_lbl.set_text(str(song.get('artistName', '')))
+        self._seek_length = max(1, int(song.get('duration', 0) or 0))
+        if changed and self._client:
+            self._client.request_artwork()
+
+    def _set_status(self, status):
+        """Switch the play button icon to match playback state."""
+        icon = (
+            'media-playback-pause-symbolic'
+            if status == 'playing'
+            else 'media-playback-start-symbolic'
+        )
+        img = Gtk.Image.new_from_icon_name(icon)
+        img.set_pixel_size(24)
+        self._play_btn.set_child(img)
+
+    def _set_position(self, position):
+        """Update the seekbar and time label from a pushed position."""
+        if self._seeking:
+            return
+        self._seek_pos = float(position or 0)
+        self._seekbar.set_value(
+            min(1.0, self._seek_pos / self._seek_length))
+        self._time_lbl.set_text(
+            f'{self._fmt_time(self._seek_pos)}'
+            f'/{self._fmt_time(self._seek_length)}'
+        )
+
+    def _set_volume(self, volume):
+        """Update the volume pill from the server (0-100)."""
+        self._vol_updating = True
+        self._vol_scale.set_value(
+            max(0.0, min(1.0, int(volume or 0) / 100.0)))
+        self._vol_updating = False
+
+    def _set_art(self, data):
+        """Decode a base64 artwork payload into the album art picture."""
+        try:
+            blob = base64.b64decode(data)
+        except Exception:
+            return
+        try:
+            loader = GdkPixbuf.PixbufLoader.new()
+            loader.write(blob)
+            loader.close()
+            pb = loader.get_pixbuf()
+            if pb:
+                texture = Gdk.Texture.new_for_pixbuf(pb)
+                self._art.set_paintable(texture)
+        except Exception as e:
+            print(f'feishin music tab art error: {e}')
+
+    def _clear_ui(self):
+        """Reset the UI to the idle/no-song state."""
+        self._track_id = None
+        self._title_lbl.set_text('Nothing playing')
+        self._artist_lbl.set_text('')
+        self._seek_length = 1
+        self._seek_pos = 0.0
+        self._seekbar.set_value(0.0)
+        self._time_lbl.set_text('0:00/0:00')
+        self._art.set_paintable(None)
+
+    # ------------------------------------------------------------------
+    # Seekbar
+    # ------------------------------------------------------------------
+
+    def _on_seek_change(self, value):
+        """Handle user-driven seekbar movement with debounce."""
+        self._seeking = True
+        if self._seek_timer_id is not None:
+            GLib.source_remove(self._seek_timer_id)
+        # value is normalised [0.0, 1.0]; convert to seconds
+        self._seek_timer_id = GLib.timeout_add(
+            150, self._do_seek, value * self._seek_length)
+
+    def _do_seek(self, position):
+        """Send the seek to the remote player and clear the seeking flag."""
+        self._seek_timer_id = None
+        self._client.seek(position)
+        self._seeking = False
+        return GLib.SOURCE_REMOVE
+
+    # ------------------------------------------------------------------
+    # Volume bar
+    # ------------------------------------------------------------------
+
+    def _on_vol_changed(self, value):
+        """Send new volume (0.0-1.0) to the remote player."""
+        if self._vol_updating:
+            return
+        self._client.set_volume(value * 100)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fmt_time(seconds):
+        """Format seconds as M:SS."""
+        s = int(seconds)
+        return f'{s // 60}:{s % 60:02d}'

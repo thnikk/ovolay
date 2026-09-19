@@ -400,6 +400,59 @@ class VolumeSliderRow(Gtk.Box):
         self.default_icon.set_visible(bool(value))
 
 
+class SongRow(Gtk.Box):
+    """A selectable row for a song in a search or queue list.
+
+    Reuses the volume-row/title-label/subtitle-label CSS classes from
+    VolumeSliderRow so it matches the rest of the overlay without new
+    styling. Holds the raw song dict from the server for playback.
+    """
+
+    def __init__(self, song, title, subtitle=None):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.song = song
+        self.is_selected_item = False
+
+        self.add_css_class("volume-row")
+        self.set_hexpand(True)
+
+        content_box = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
+        content_box.add_css_class("volume-row-content")
+
+        title_box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        title_box.set_hexpand(True)
+        title_box.set_valign(Gtk.Align.CENTER)
+
+        title_label = Gtk.Label()
+        title_label.set_text(title)
+        title_label.set_halign(Gtk.Align.START)
+        title_label.set_ellipsize(3)
+        title_label.set_max_width_chars(30)
+        title_label.add_css_class("title-label")
+        title_box.append(title_label)
+
+        if subtitle:
+            subtitle_label = Gtk.Label()
+            subtitle_label.set_text(subtitle)
+            subtitle_label.set_halign(Gtk.Align.START)
+            subtitle_label.set_ellipsize(3)
+            subtitle_label.set_max_width_chars(35)
+            subtitle_label.add_css_class("subtitle-label")
+            title_box.append(subtitle_label)
+
+        content_box.append(title_box)
+        self.append(content_box)
+
+    def set_selected(self, selected):
+        self.is_selected_item = selected
+        if selected:
+            self.add_css_class("selected")
+        else:
+            self.remove_css_class("selected")
+
+
 class PillSlider(Gtk.DrawingArea):
     """Horizontal pill-shaped slider with no visible handle.
 

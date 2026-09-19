@@ -69,8 +69,9 @@ from gi.repository import (  # noqa
 )
 
 from gamepad import GamepadListener  # noqa
-from music import MusicTab  # noqa
-from widgets import VScrollGradientBox, VolumeSliderRow  # noqa
+from music import MusicTab, FeishinMusicTab  # noqa
+from widgets import VScrollGradientBox, VolumeSliderRow, SongRow  # noqa
+from feishin import FeishinClient  # noqa
 
 # Load CSS from style.css next to this file
 _CSS_PATH = Path(__file__).parent / 'style.css'
@@ -109,11 +110,34 @@ def parse_args() -> argparse.Namespace:
         help='keybindings to enable (default: all)')
     parser.add_argument(
         '-t', '--tab',
-        choices=['apps', 'outputs', 'inputs', 'music'],
+        choices=[
+            'apps', 'outputs', 'inputs', 'music', 'search', 'queue'],
         default='apps', help='tab to show on startup (default: apps)')
+    parser.add_argument(
+        '-f', '--feishin', action='store_true',
+        help='use the Feishin remote API instead of MPRIS '
+             '(enables the search and queue tabs)')
+    parser.add_argument(
+        '--feishin-host', metavar='HOST', default='localhost',
+        help='host running the Feishin remote server')
+    parser.add_argument(
+        '--feishin-port', metavar='PORT', type=int, default=4333,
+        help='port of the Feishin remote server')
+    parser.add_argument(
+        '--feishin-user', metavar='USER', default='',
+        help='username for the Feishin remote server')
+    parser.add_argument(
+        '--feishin-pass', metavar='PASS', default='',
+        help='password for the Feishin remote server')
     parser.add_argument(
         '--screenshot', metavar='PATH',
         help=argparse.SUPPRESS)
+    parser.add_argument(
+        '-s', '--width', metavar='PX', type=int, default=550,
+        help='window width in pixels (default: 550)')
+    parser.add_argument(
+        '-n', '--no-tab-labels', action='store_true',
+        help='hide tab labels, showing only icons')
     parser.add_argument(
         '-W', '--window', action='store_true',
         help='run as a regular window without layer shell')
@@ -185,8 +209,13 @@ class VolumeOverlay(Adw.ApplicationWindow):
         super().__init__(**kwargs)
         self.args = args
         self.current_tab = 'apps'
-        # Per-tab selection index and known-device-index cache
-        self.selected_indices = {'apps': 0, 'outputs': 0, 'inputs': 0}
+        # Per-tab selection index and known-device-index cache.
+        # Search/queue are only present in feishin mode (-f).
+        self.TAB_ORDER = ['apps', 'outputs', 'inputs', 'music']
+        if self.args.feishin:
+            self.TAB_ORDER += ['search', 'queue']
+        self.selected_indices = {
+            tab: 0 for tab in self.TAB_ORDER}
         self._known = {'apps': None, 'outputs': None, 'inputs': None}
         # Cache of the current default device name per tab
         self._known_defaults = {'outputs': None, 'inputs': None}
@@ -241,8 +270,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
                 "leave", lambda c: GLib.idle_add(self._dismiss_if_unfocused))
             self.add_controller(focus_controller)
 
-        self.set_default_size(550, 1)
-        self.set_size_request(550, -1)
+        self.set_default_size(self.args.width, 1)
+        self.set_size_request(self.args.width, -1)
         self.add_css_class("overlay-window")
         if self.args.window:
             self.add_css_class("windowed")
@@ -257,6 +286,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self.switcher = Adw.ViewSwitcher()
         self.switcher.set_stack(self.view_stack)
         self.switcher.set_policy(Adw.ViewSwitcherPolicy.WIDE)
+        if self.args.no_tab_labels:
+            self.switcher.add_css_class("no-tab-labels")
         self.switcher.set_hexpand(True)
 
         # Close button sits to the right of the tab switcher
@@ -302,11 +333,67 @@ class VolumeOverlay(Adw.ApplicationWindow):
                 tab_child, tab_id, tab_title)
             page.set_icon_name(icon)
 
-        # Music tab has its own widget rather than a generic list box
-        self.music_tab = MusicTab(player_filter=self.args.player)
+        # Music tab has its own widget rather than a generic list box.
+        # In feishin mode it is driven by the remote API instead of MPRIS.
+        if self.args.feishin:
+            self.feishin = FeishinClient(
+                host=self.args.feishin_host,
+                port=self.args.feishin_port,
+                username=self.args.feishin_user,
+                password=self.args.feishin_pass,
+                on_update=self._on_feishin_update)
+            self.music_tab = FeishinMusicTab(self.feishin)
+        else:
+            self.feishin = None
+            self.music_tab = MusicTab(player_filter=self.args.player)
         music_page = self.view_stack.add_titled(
             self.music_tab, 'music', 'Music')
         music_page.set_icon_name('audio-x-generic-symbolic')
+
+        # Feishin-only tabs: search and queue
+        if self.args.feishin:
+            # Search tab: entry above a results list box
+            search_box = Gtk.Box(
+                orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            self.search_entry = Gtk.SearchEntry()
+            self.search_entry.set_placeholder_text('Search for a song...')
+            self.search_entry.connect(
+                'search-changed', self._on_search_text_changed)
+            self._search_debounce_id = None
+            search_box.append(self.search_entry)
+
+            search_list = Gtk.Box(
+                orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            search_list.add_css_class("boxed-list")
+            self.list_boxes['search'] = search_list
+            if self.args.limit_height:
+                scroll_box = VScrollGradientBox(
+                    search_list, max_height=SCROLL_HEIGHT)
+                self._scroll_windows['search'] = scroll_box._scroll
+                search_box.append(scroll_box)
+            else:
+                search_box.append(search_list)
+            search_page = self.view_stack.add_titled(
+                search_box, 'search', 'Search')
+            search_page.set_icon_name('system-search-symbolic')
+
+            # Queue tab: same generic list-box pattern as apps/outputs/inputs
+            queue_list = Gtk.Box(
+                orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            queue_list.add_css_class("boxed-list")
+            self.list_boxes['queue'] = queue_list
+            if self.args.limit_height:
+                scroll_box = VScrollGradientBox(
+                    queue_list, max_height=SCROLL_HEIGHT)
+                self._scroll_windows['queue'] = scroll_box._scroll
+                queue_child = scroll_box
+            else:
+                queue_child = queue_list
+            queue_page = self.view_stack.add_titled(
+                queue_child, 'queue', 'Queue')
+            queue_page.set_icon_name('view-list-symbolic')
+
+            self.feishin.start()
 
         # Track the visible tab for keyboard navigation
         self.view_stack.connect(
@@ -337,7 +424,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
         self._start_event_listener()
 
         # Switch to the requested startup tab
-        self.view_stack.set_visible_child_name(self.args.tab)
+        start_tab = (
+            self.args.tab if self.args.tab in self.TAB_ORDER
+            else self.TAB_ORDER[0])
+        self.view_stack.set_visible_child_name(start_tab)
 
         # Start gamepad listener if requested
         if self.args.gamepad:
@@ -377,6 +467,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
         def _south():
             if self.current_tab == 'music':
                 self.music_tab._cmd_play_pause()
+            elif self.current_tab == 'search':
+                self.play_selected_song()
+            elif self.current_tab == 'queue':
+                self.play_selected_queue_item()
             else:
                 self.set_selected_as_default()
 
@@ -756,6 +850,84 @@ class VolumeOverlay(Adw.ApplicationWindow):
             pass
 
     # ------------------------------------------------------------------
+    # Feishin search / queue
+    # ------------------------------------------------------------------
+
+    def _on_search_text_changed(self, entry):
+        """Debounce search entry input before querying the server."""
+        if self._search_debounce_id is not None:
+            GLib.source_remove(self._search_debounce_id)
+        text = entry.get_text()
+        self._search_debounce_id = GLib.timeout_add(
+            300, self._do_search, text)
+
+    def _do_search(self, text):
+        self._search_debounce_id = None
+        if text:
+            self.feishin.search(text)
+        else:
+            self.refresh_search_results([])
+        return GLib.SOURCE_REMOVE
+
+    def _on_feishin_update(self, event, data):
+        """Route a Feishin client update onto the music/search/queue tabs."""
+        if not self.args.feishin:
+            return GLib.SOURCE_REMOVE
+        if event == 'tracks-response':
+            self.refresh_search_results(data.get('items') or [])
+        elif event == 'queue-state':
+            self.refresh_queue(data.get('items') or [])
+        else:
+            # Music tab state events: state/song/playback/position/volume/proxy
+            self.music_tab.update(event, data)
+        return GLib.SOURCE_REMOVE
+
+    @staticmethod
+    def _song_row_text(song):
+        """Return (title, subtitle) for a song dict from the server."""
+        title = str(song.get('name', 'Unknown Song'))
+        artist = str(song.get('artistName', ''))
+        return title, artist or None
+
+    def refresh_search_results(self, songs):
+        """Rebuild the Search tab's result list."""
+        lb = self.list_boxes['search']
+        self._clear_list(lb)
+        self.selected_indices['search'] = 0
+        for song in songs:
+            title, subtitle = self._song_row_text(song)
+            lb.append(SongRow(song, title, subtitle))
+        if self.current_tab == 'search':
+            self.update_selection_visuals()
+
+    def refresh_queue(self, songs):
+        """Rebuild the Queue tab's list."""
+        lb = self.list_boxes['queue']
+        self._clear_list(lb)
+        self.selected_indices['queue'] = 0
+        for song in songs:
+            title, subtitle = self._song_row_text(song)
+            lb.append(SongRow(song, title, subtitle))
+        if self.current_tab == 'queue':
+            self.update_selection_visuals()
+
+    def play_selected_song(self):
+        """Play the selected Search tab result."""
+        row = self.get_selected_row()
+        if row is not None and getattr(row, 'song', None):
+            song_id = row.song.get('id')
+            if song_id is not None:
+                self.feishin.play_song(song_id)
+
+    def play_selected_queue_item(self):
+        """Jump playback to the selected Queue tab item."""
+        row = self.get_selected_row()
+        if row is not None and getattr(row, 'song', None):
+            unique_id = row.song.get('uniqueId')
+            if unique_id is not None:
+                self.feishin.play_queue_item(unique_id)
+
+    # ------------------------------------------------------------------
     # Tab switching
     # ------------------------------------------------------------------
 
@@ -779,6 +951,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
         if name:
             self.current_tab = name
             self.update_selection_visuals()
+            if name == 'search':
+                self.search_entry.grab_focus()
 
     # ------------------------------------------------------------------
     # Navigation helpers (operate on the current visible tab)
@@ -895,19 +1069,51 @@ class VolumeOverlay(Adw.ApplicationWindow):
         # Invalidate the default cache so the next refresh picks up the change
         self._known_defaults[self.current_tab] = None
 
-    # Tab order used for cycling and direct selection
-    TAB_ORDER = ['apps', 'outputs', 'inputs', 'music']
-
     def switch_tab(self, direction):
         """Cycle to the next or previous tab by direction (+1/-1)."""
         idx = self.TAB_ORDER.index(self.current_tab)
         idx = (idx + direction) % len(self.TAB_ORDER)
         self.view_stack.set_visible_child_name(self.TAB_ORDER[idx])
 
+    def _on_search_tab_key(self, keyval, state=0):
+        """Handle keys while the Search tab is active.
+
+        Only navigation keys (Up/Down/Enter/Tab) are intercepted here;
+        every other key (letters, digits, q, ...) falls through so it
+        reaches the focused search entry instead of triggering a shortcut.
+        """
+        shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
+        if keyval == Gdk.KEY_Tab:
+            self.switch_tab(-1 if shift else 1)
+            return True
+        if keyval == Gdk.KEY_ISO_Left_Tab:
+            # Shift+Tab often arrives as ISO_Left_Tab
+            self.switch_tab(-1)
+            return True
+        if keyval == Gdk.KEY_Up:
+            self.move_selection(-1)
+            return True
+        if keyval == Gdk.KEY_Down:
+            self.move_selection(1)
+            return True
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            self.play_selected_song()
+            return True
+        return False
+
     def on_key_pressed(self, controller, keyval, keycode, state):
         shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
 
-        if keyval in (Gdk.KEY_Escape, Gdk.KEY_q):
+        if keyval == Gdk.KEY_Escape:
+            self._dismiss()
+            return True
+
+        # Search tab: keep typing free for the entry; only steal
+        # navigation keys, and let Escape above still dismiss.
+        if self.current_tab == 'search':
+            return self._on_search_tab_key(keyval, state)
+
+        if keyval == Gdk.KEY_q:
             self._dismiss()
             return True
 
@@ -920,8 +1126,8 @@ class VolumeOverlay(Adw.ApplicationWindow):
             self.switch_tab(-1)
             return True
 
-        # 1-4 switch directly to a specific tab
-        if Gdk.KEY_1 <= keyval <= Gdk.KEY_4:
+        # 1-6 switch directly to a specific tab
+        if Gdk.KEY_1 <= keyval <= Gdk.KEY_6:
             tab_idx = keyval - Gdk.KEY_1
             if tab_idx < len(self.TAB_ORDER):
                 self.view_stack.set_visible_child_name(
@@ -963,7 +1169,10 @@ class VolumeOverlay(Adw.ApplicationWindow):
             self.toggle_selected_mute()
             return True
         elif keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
-            self.set_selected_as_default()
+            if self.current_tab == 'queue':
+                self.play_selected_queue_item()
+            else:
+                self.set_selected_as_default()
             return True
         return False
 

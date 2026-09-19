@@ -15,6 +15,10 @@
     padding: 0;
 }
 
+.volume-row.selected {
+    background-color: alpha(@accent_bg_color, 0.3);
+}
+
 .volume-progress trough {
     background-color: alpha(#ffffff, 0.1);
     border: none;
@@ -72,6 +76,12 @@
 
 viewswitcher {
     background-color: transparent;
+}
+
+viewswitcher.no-tab-labels label {
+    font-size: 0;
+    min-width: 0;
+    padding: 0;
 }
 
 .tab-content {
